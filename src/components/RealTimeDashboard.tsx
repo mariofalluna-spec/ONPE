@@ -21,16 +21,18 @@ import {
   BookOpen,
   Flame,
   Info,
-  File
+  File,
+  Trash2
 } from 'lucide-react';
 import { IncidentReport } from '../types';
 import AudioReader from './AudioReader';
 
 interface RealTimeDashboardProps {
   reports: IncidentReport[];
+  onClearAllData?: () => void;
 }
 
-export default function RealTimeDashboard({ reports }: RealTimeDashboardProps) {
+export default function RealTimeDashboard({ reports, onClearAllData }: RealTimeDashboardProps) {
   const [filterDistrict, setFilterDistrict] = useState<string>('Todos');
   const [filterRubro, setFilterRubro] = useState<string>('Todos');
   const [filterTipo, setFilterTipo] = useState<string>('Todos'); // Todos, Con Incidencia, Sin Incidencia
@@ -164,8 +166,23 @@ export default function RealTimeDashboard({ reports }: RealTimeDashboardProps) {
             </p>
           </div>
 
-          <div className="shrink-0 bg-white p-3 rounded-2xl flex items-center justify-center shadow-lg border-2 border-blue-200">
-            <AudioReader text={dashboardSpeechText} />
+          <div className="flex flex-wrap sm:flex-nowrap items-center gap-3">
+            {onClearAllData && reports.length > 0 && (
+              <button
+                type="button"
+                id="btn-clear-test-data-top"
+                onClick={onClearAllData}
+                className="px-4 py-3 bg-rose-600 hover:bg-rose-700 active:scale-95 text-white font-black text-xs sm:text-sm rounded-2xl shadow-lg border-2 border-rose-400 flex items-center gap-1.5 transition-all cursor-pointer"
+                title="Eliminar todos los reportes de prueba y dejar la base de datos limpia"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span>Borrar Datos de Prueba ({reports.length})</span>
+              </button>
+            )}
+
+            <div className="shrink-0 bg-white p-3 rounded-2xl flex items-center justify-center shadow-lg border-2 border-blue-200">
+              <AudioReader text={dashboardSpeechText} />
+            </div>
           </div>
         </div>
 

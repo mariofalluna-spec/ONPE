@@ -10,7 +10,7 @@ import {
   Download
 } from 'lucide-react';
 import { IncidentReport } from './types';
-import DistrictWizard from './components/DistrictWizard';
+import DistrictWizard, { SubmitResult } from './components/DistrictWizard';
 import RealTimeDashboard from './components/RealTimeDashboard';
 import SupabaseConfig from './components/SupabaseConfig';
 import AudioReader from './components/AudioReader';
@@ -120,7 +120,7 @@ export default function App() {
   const [isSupabaseActive, setIsSupabaseActive] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  // Password protection for Reports & Excel ("mario")
+  // Password protection for Reports & Excel ("2026mario")
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [showPasswordModal, setShowPasswordModal] = useState<boolean>(false);
   const [passwordInput, setPasswordInput] = useState<string>('');
@@ -150,7 +150,7 @@ export default function App() {
 
   const handleVerifyPassword = (e: FormEvent) => {
     e.preventDefault();
-    if (passwordInput === 'mario') {
+    if (passwordInput === '2026mario') {
       setIsAuthenticated(true);
       setShowConfigAccess(true);
       setShowPasswordModal(false);
@@ -197,10 +197,8 @@ export default function App() {
     });
   };
 
-  // Load initial data and clear legacy demo data for a pristine empty start
+  // Load initial data
   useEffect(() => {
-    // Unconditionally reset localStorage to guarantee a clean start from scratch as requested
-    localStorage.setItem('MACE_INCIDENTS_LIST', JSON.stringify([]));
     loadAllReports();
   }, []);
 
@@ -312,7 +310,7 @@ export default function App() {
   };
 
   // Submit a batch of new reports (called from Wizard)
-  const handleReportsSubmit = async (newReports: IncidentReport[]) => {
+  const handleReportsSubmit = async (newReports: IncidentReport[]): Promise<SubmitResult> => {
     const supabase = getSupabaseClient();
     
     // Add unique local IDs for client references
@@ -323,41 +321,64 @@ export default function App() {
 
     if (supabase) {
       try {
+        const payload = newReports.map(r => ({
+          nombre_informante: r.nombre_informante,
+          odpe: r.odpe,
+          distrito: r.distrito,
+          rubro_id: r.rubro_id,
+          categoria: r.categoria,
+          pregunta_texto: r.pregunta_texto,
+          tiene_problema: r.tiene_problema,
+          ocurrencia: r.ocurrencia,
+          consecuencia: r.consecuencia,
+          acciones_odpe: r.acciones_odpe,
+          fuente_evidencia: r.fuente_evidencia,
+          fecha_creacion: r.fecha_creacion
+        }));
+
         // Insert into Supabase table in a single batch
         const { error } = await supabase
           .from(SUPABASE_TABLE_NAME)
-          .insert(
-            newReports.map(r => ({
-              nombre_informante: r.nombre_informante,
-              odpe: r.odpe,
-              distrito: r.distrito,
-              rubro_id: r.rubro_id,
-              categoria: r.categoria,
-              pregunta_texto: r.pregunta_texto,
-              tiene_problema: r.tiene_problema,
-              ocurrencia: r.ocurrencia,
-              consecuencia: r.consecuencia,
-              acciones_odpe: r.acciones_odpe,
-              fuente_evidencia: r.fuente_evidencia,
-              fecha_creacion: r.fecha_creacion
-            }))
-          );
+          .insert(payload);
 
         if (error) {
           console.error('No se pudo insertar en Supabase, guardando en local:', error);
           saveReportsLocally(reportsWithId);
+          return {
+            success: false,
+            isOnline: false,
+            count: newReports.length,
+            error: `Error de Supabase: ${error.message}`
+          };
         } else {
           console.log('Reportes guardados exitosamente en Supabase en lote!');
           // Refresh list to pull latest from server
-          fetchFromSupabase();
+          await fetchFromSupabase();
+          return {
+            success: true,
+            isOnline: true,
+            count: newReports.length
+          };
         }
-      } catch (err) {
+      } catch (err: any) {
         console.error('Excepción al guardar en Supabase, usando local:', err);
         saveReportsLocally(reportsWithId);
+        return {
+          success: false,
+          isOnline: false,
+          count: newReports.length,
+          error: err?.message || 'Error de conexión con la base central.'
+        };
       }
     } else {
       // No Supabase, save to localStorage
       saveReportsLocally(reportsWithId);
+      return {
+        success: false,
+        isOnline: false,
+        count: newReports.length,
+        error: 'Este celular no está vinculado a Supabase. El reporte se guardó solo en este dispositivo.'
+      };
     }
   };
 
@@ -414,28 +435,34 @@ export default function App() {
   };
 
   const handleClearAllData = async () => {
-    const confirmAction = window.confirm('¿Estás seguro de que quieres borrar todos los reportes de incidencias? Esta acción no se puede deshacer.');
+    const confirmAction = window.confirm('¿Estás seguro de que quieres borrar todos los reportes de prueba? Esta acción vaciará la tabla en Supabase y la memoria local para empezar desde cero con datos reales.');
     if (!confirmAction) return;
 
     const supabase = getSupabaseClient();
     if (supabase) {
+      setLoading(true);
       try {
         const { error } = await supabase
           .from(SUPABASE_TABLE_NAME)
           .delete()
-          .neq('distrito', 'placeholder-value-to-delete-all'); // delete all records trick
+          .gte('rubro_id', 0); // targets all rows reliably
         
         if (error) {
           alert('Error de Supabase al borrar: ' + error.message);
         } else {
           setReports([]);
+          localStorage.removeItem('MACE_INCIDENTS_LIST');
+          alert('¡Base de datos limpiada con éxito! Se eliminaron todos los registros de prueba de Supabase y de este equipo.');
         }
       } catch (err: any) {
         alert('Error de red al borrar en Supabase: ' + err.message);
+      } finally {
+        setLoading(false);
       }
     } else {
       setReports([]);
       localStorage.removeItem('MACE_INCIDENTS_LIST');
+      alert('¡Datos de prueba locales eliminados con éxito!');
     }
   };
 
@@ -525,9 +552,18 @@ export default function App() {
               </button>
             </div>
           ) : (
-            <div className="flex items-center gap-2 text-xs font-semibold text-slate-500 bg-slate-100/90 px-3.5 py-2 rounded-full border border-slate-200">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-              <span className="font-bold text-slate-700">Portal de Registro Oficial</span>
+            <div className="flex items-center gap-2 text-xs font-semibold">
+              {isSupabaseActive ? (
+                <div className="flex items-center gap-1.5 text-emerald-800 bg-emerald-50 px-3 py-1.5 rounded-full border border-emerald-200 shadow-sm">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                  <span className="font-bold">En línea</span>
+                </div>
+              ) : (
+                <div className="flex items-center gap-1.5 text-amber-800 bg-amber-50 px-3 py-1.5 rounded-full border border-amber-200 shadow-sm">
+                  <span className="w-2 h-2 rounded-full bg-amber-500"></span>
+                  <span className="font-bold">Sin conexión</span>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -564,12 +600,13 @@ export default function App() {
                   <DistrictWizard 
                     onReportSubmit={handleReportsSubmit} 
                     onViewReportsClick={() => handleAccessAttempt('dashboard')} 
+                    isSupabaseActive={isSupabaseActive}
                   />
                 </div>
               )}
 
               {activeTab === 'dashboard' && (
-                <RealTimeDashboard reports={reports} />
+                <RealTimeDashboard reports={reports} onClearAllData={handleClearAllData} />
               )}
 
               {activeTab === 'config' && (

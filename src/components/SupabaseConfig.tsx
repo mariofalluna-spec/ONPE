@@ -8,7 +8,8 @@ import {
   RefreshCw, 
   Trash2, 
   PlusCircle, 
-  HelpCircle 
+  HelpCircle,
+  Share2
 } from 'lucide-react';
 import { 
   getStoredSupabaseConfig, 
@@ -16,7 +17,8 @@ import {
   clearStoredSupabaseConfig, 
   getSupabaseClient, 
   SUPABASE_SQL_SETUP,
-  SUPABASE_TABLE_NAME
+  SUPABASE_TABLE_NAME,
+  generateShareableLink
 } from '../supabaseClient';
 
 interface SupabaseConfigProps {
@@ -38,6 +40,7 @@ export default function SupabaseConfig({
   const [connectionStatus, setConnectionStatus] = useState<'none' | 'success' | 'error' | 'testing'>('none');
   const [connectionMessage, setConnectionMessage] = useState('');
   const [copied, setCopied] = useState(false);
+  const [copiedShareLink, setCopiedShareLink] = useState(false);
   const [showSqlGuide, setShowSqlGuide] = useState(false);
 
   useEffect(() => {
@@ -67,6 +70,13 @@ export default function SupabaseConfig({
     setConnectionStatus('none');
     setConnectionMessage('');
     onConfigChange();
+  };
+
+  const handleCopyShareLink = () => {
+    const link = generateShareableLink(url, anonKey);
+    navigator.clipboard.writeText(link);
+    setCopiedShareLink(true);
+    setTimeout(() => setCopiedShareLink(false), 3000);
   };
 
   const testConnection = async (targetUrl: string, targetKey: string) => {
@@ -159,6 +169,53 @@ export default function SupabaseConfig({
           </button>
         </div>
       </div>
+
+      {/* SECCIÓN CRUCIAL: ENLACE PARA VINCULAR TODOS LOS CELULARES */}
+      {isSaved && url && anonKey && (
+        <div className="bg-gradient-to-r from-emerald-50 to-teal-50 border-3 border-emerald-300 rounded-2xl p-5 space-y-3 shadow-sm animate-fadeIn">
+          <div className="flex items-start gap-3">
+            <div className="p-2.5 bg-emerald-600 text-white rounded-xl shrink-0 shadow-sm mt-0.5">
+              <Share2 className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-base sm:text-lg font-black text-emerald-950">
+                📲 Enlace Oficial para los Celulares de los Informantes
+              </h3>
+              <p className="text-xs sm:text-sm text-emerald-800 font-medium leading-relaxed mt-0.5">
+                Envía este enlace por WhatsApp a los coordinadores. Al abrirlo en sus teléfonos, su celular se <strong>conectará y guardará directamente en esta base de datos de Supabase</strong> sin pedirles configurar nada ni saber contraseñas.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-1">
+            <input
+              id="input-shareable-link"
+              type="text"
+              readOnly
+              value={generateShareableLink(url, anonKey)}
+              className="flex-1 px-3.5 py-2.5 bg-white border-2 border-emerald-300 rounded-xl text-xs font-mono text-emerald-900 select-all focus:outline-none"
+            />
+            <button
+              type="button"
+              id="btn-copy-share-link"
+              onClick={handleCopyShareLink}
+              className="px-5 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white font-black text-sm rounded-xl shadow transition-all active:scale-95 flex items-center justify-center gap-1.5 shrink-0"
+            >
+              {copiedShareLink ? (
+                <>
+                  <Check className="w-4 h-4 text-emerald-200" />
+                  <span>¡Enlace Copiado!</span>
+                </>
+              ) : (
+                <>
+                  <Copy className="w-4 h-4" />
+                  <span>Copiar Enlace para Celulares</span>
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      )}
 
       <form onSubmit={handleSave} className="space-y-4">
         <div>

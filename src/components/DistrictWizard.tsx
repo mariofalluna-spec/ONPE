@@ -88,12 +88,29 @@ export function getCategoryTheme(id: number) {
   };
 }
 
-interface DistrictWizardProps {
-  onReportSubmit: (reports: IncidentReport[]) => void;
-  onViewReportsClick: () => void;
+interface QuestionData {
+  hasProblem: boolean;
+  ocurrencia: string;
+  consecuencia: string;
+  accionesOdpe: string;
+  fuenteEvidencia: string;
+  selectedFile: { name: string; data: string; type: string } | null;
 }
 
-export default function DistrictWizard({ onReportSubmit, onViewReportsClick }: DistrictWizardProps) {
+export interface SubmitResult {
+  success: boolean;
+  isOnline: boolean;
+  count: number;
+  error?: string;
+}
+
+interface DistrictWizardProps {
+  onReportSubmit: (reports: IncidentReport[]) => Promise<SubmitResult>;
+  onViewReportsClick: () => void;
+  isSupabaseActive?: boolean;
+}
+
+export default function DistrictWizard({ onReportSubmit, onViewReportsClick, isSupabaseActive = false }: DistrictWizardProps) {
   // Navigation states
   const [step, setStep] = useState<number>(1); // 1: Datos del Informante, 2: Questions, 3: Success
   
@@ -110,7 +127,10 @@ export default function DistrictWizard({ onReportSubmit, onViewReportsClick }: D
 
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState<number>(0);
   
-  // Active question answers
+  // All 9 answers dictionary (key is rubro_id 1 to 9)
+  const [answers, setAnswers] = useState<Record<number, QuestionData>>({});
+
+  // Active question form inputs
   const [hasProblem, setHasProblem] = useState<boolean | null>(null);
   const [ocurrencia, setOcurrencia] = useState<string>('');
   const [consecuencia, setConsecuencia] = useState<string>('');
@@ -118,25 +138,42 @@ export default function DistrictWizard({ onReportSubmit, onViewReportsClick }: D
   const [fuenteEvidencia, setFuenteEvidencia] = useState<string>('');
   const [selectedFile, setSelectedFile] = useState<{ name: string; data: string; type: string } | null>(null);
 
-  // Accumulator of affirmative incident reports in this session
-  const [savedReportsInSession, setSavedReportsInSession] = useState<IncidentReport[]>([]);
+  // Submission state
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [submitResult, setSubmitResult] = useState<SubmitResult | null>(null);
 
   const currentQuestion = QUESTIONS[currentQuestionIndex];
   const theme = getCategoryTheme(currentQuestion?.id || 1);
 
+  // Load question data into local form inputs
+  const loadQuestionData = (questionId: number, currentAnswersDict: Record<number, QuestionData>) => {
+    const saved = currentAnswersDict[questionId];
+    if (saved) {
+      setHasProblem(saved.hasProblem);
+      setOcurrencia(saved.ocurrencia || '');
+      setConsecuencia(saved.consecuencia || '');
+      setAccionesOdpe(saved.accionesOdpe || '');
+      setFuenteEvidencia(saved.fuenteEvidencia || '');
+      setSelectedFile(saved.selectedFile || null);
+    } else {
+      setHasProblem(null);
+      setOcurrencia('');
+      setConsecuencia('');
+      setAccionesOdpe('');
+      setFuenteEvidencia('');
+      setSelectedFile(null);
+    }
+  };
+
   const handleStartReporting = (e: FormEvent) => {
     e.preventDefault();
-    if (!nombreCompleto || !odpe || !distritoZona) {
+    if (!nombreCompleto.trim() || !odpe.trim() || !distritoZona.trim()) {
       alert('Por favor complete todos los datos requeridos marcados con asterisco (*)');
       return;
     }
     setStep(2);
     setCurrentQuestionIndex(0);
-    setSavedReportsInSession([]);
-    resetQuestionState();
-  };
-
-  const resetQuestionState = () => {
+    setAnswers({});
     setHasProblem(null);
     setOcurrencia('');
     setConsecuencia('');
@@ -162,7 +199,7 @@ export default function DistrictWizard({ onReportSubmit, onViewReportsClick }: D
         const img = new Image();
         img.onload = () => {
           const canvas = document.createElement('canvas');
-          const MAX_WIDTH = 600; // Optimal size for high readability and small footprint
+          const MAX_WIDTH = 600;
           const scale = MAX_WIDTH / img.width;
           
           if (img.width > MAX_WIDTH) {
@@ -176,7 +213,6 @@ export default function DistrictWizard({ onReportSubmit, onViewReportsClick }: D
           const ctx = canvas.getContext('2d');
           ctx?.drawImage(img, 0, 0, canvas.width, canvas.height);
           
-          // Compressed format (0.7 quality)
           const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.7);
           setSelectedFile({
             name: file.name,
@@ -186,7 +222,6 @@ export default function DistrictWizard({ onReportSubmit, onViewReportsClick }: D
         };
         img.src = result;
       } else {
-        // Normal file
         setSelectedFile({
           name: file.name,
           data: result,
@@ -197,7 +232,7 @@ export default function DistrictWizard({ onReportSubmit, onViewReportsClick }: D
     reader.readAsDataURL(file);
   };
 
-  const handleNext = () => {
+  const handleNext = async () => {
     if (hasProblem === null) return;
 
     // If answer is SÍ, ensure required details are filled
@@ -206,88 +241,112 @@ export default function DistrictWizard({ onReportSubmit, onViewReportsClick }: D
         alert('Por favor complete todos los detalles obligatorios (*) del problema antes de continuar.');
         return;
       }
-
-      const encodedEvidence = selectedFile 
-        ? `${fuenteEvidencia || 'Archivo adjunto cargado'} ||| ${selectedFile.data} ||| ${selectedFile.name}` 
-        : fuenteEvidencia;
-
-      const activeReport: IncidentReport = {
-        nombre_informante: nombreCompleto,
-        odpe: odpe,
-        distrito: distritoZona,
-        rubro_id: currentQuestion.id,
-        categoria: currentQuestion.titulo,
-        pregunta_texto: currentQuestion.desc,
-        tiene_problema: true,
-        ocurrencia: ocurrencia,
-        consecuencia: consecuencia,
-        acciones_odpe: accionesOdpe,
-        fuente_evidencia: encodedEvidence,
-        fecha_creacion: new Date(fechaReporte).toISOString()
-      };
-
-      // Add to session list
-      setSavedReportsInSession(prev => [...prev, activeReport]);
     }
+
+    const currentData: QuestionData = {
+      hasProblem: hasProblem,
+      ocurrencia: hasProblem ? ocurrencia.trim() : 'Sin novedad / Situación normal',
+      consecuencia: hasProblem ? consecuencia.trim() : 'Sin afectación reportada',
+      accionesOdpe: hasProblem ? accionesOdpe.trim() : 'Monitoreo preventivo de la ODPE',
+      fuenteEvidencia: hasProblem ? fuenteEvidencia.trim() : 'Reporte de informante',
+      selectedFile: hasProblem ? selectedFile : null,
+    };
+
+    const updatedAnswers = {
+      ...answers,
+      [currentQuestion.id]: currentData
+    };
+    setAnswers(updatedAnswers);
 
     // Go to next rubro or save all
     if (currentQuestionIndex < QUESTIONS.length - 1) {
-      setCurrentQuestionIndex(prev => prev + 1);
-      resetQuestionState();
+      const nextIndex = currentQuestionIndex + 1;
+      setCurrentQuestionIndex(nextIndex);
+      loadQuestionData(QUESTIONS[nextIndex].id, updatedAnswers);
     } else {
-      // Finished all 9 rubros! Save all accumulated affirmative reports
-      const encodedEvidence = selectedFile 
-        ? `${fuenteEvidencia || 'Archivo adjunto cargado'} ||| ${selectedFile.data} ||| ${selectedFile.name}` 
-        : fuenteEvidencia;
+      // Finished all 9 rubros! Compile and submit all 9
+      await submitAllNineQuestions(updatedAnswers);
+    }
+  };
 
-      const finalReports = hasProblem 
-        ? [...savedReportsInSession, {
-            nombre_informante: nombreCompleto,
-            odpe: odpe,
-            distrito: distritoZona,
-            rubro_id: currentQuestion.id,
-            categoria: currentQuestion.titulo,
-            pregunta_texto: currentQuestion.desc,
-            tiene_problema: true,
-            ocurrencia: ocurrencia,
-            consecuencia: consecuencia,
-            acciones_odpe: accionesOdpe,
-            fuente_evidencia: encodedEvidence,
-            fecha_creacion: new Date(fechaReporte).toISOString()
-          }]
-        : savedReportsInSession;
+  const submitAllNineQuestions = async (answersDict: Record<number, QuestionData>) => {
+    // Build array of all 9 questions
+    const allNineReports: IncidentReport[] = QUESTIONS.map((q) => {
+      const ans = answersDict[q.id];
+      if (ans && ans.hasProblem) {
+        const encodedEvidence = ans.selectedFile 
+          ? `${ans.fuenteEvidencia || 'Archivo adjunto'} ||| ${ans.selectedFile.data} ||| ${ans.selectedFile.name}` 
+          : ans.fuenteEvidencia;
 
-      // Submit all reports as an array batch to prevent stale state issues
-      if (finalReports.length > 0) {
-        onReportSubmit(finalReports);
-      } else {
-        // If there were no issues in any of the 9 rubros, we can submit a clean placeholder report as an array
-        onReportSubmit([{
-          nombre_informante: nombreCompleto,
-          odpe: odpe,
-          distrito: distritoZona,
-          rubro_id: 0,
-          categoria: 'Sin Ocurrencias',
-          pregunta_texto: 'Situación normal en todos los 9 rubros.',
-          tiene_problema: false,
-          ocurrencia: 'Sin novedad',
-          consecuencia: 'Ninguna',
-          acciones_odpe: 'Monitoreo constante',
-          fuente_evidencia: 'Reporte del Coordinador',
+        return {
+          nombre_informante: nombreCompleto.trim(),
+          odpe: odpe.trim(),
+          distrito: distritoZona.trim(),
+          rubro_id: q.id,
+          categoria: q.titulo,
+          pregunta_texto: q.desc,
+          tiene_problema: true,
+          ocurrencia: ans.ocurrencia || 'Incidencia reportada',
+          consecuencia: ans.consecuencia || 'En evaluación',
+          acciones_odpe: ans.accionesOdpe || 'Acción en curso',
+          fuente_evidencia: encodedEvidence || 'Reporte de Informante',
           fecha_creacion: new Date(fechaReporte).toISOString()
-        }]);
+        };
+      } else {
+        return {
+          nombre_informante: nombreCompleto.trim(),
+          odpe: odpe.trim(),
+          distrito: distritoZona.trim(),
+          rubro_id: q.id,
+          categoria: q.titulo,
+          pregunta_texto: q.desc,
+          tiene_problema: false,
+          ocurrencia: 'Sin novedad / Situación normal',
+          consecuencia: 'Sin afectación reportada',
+          acciones_odpe: 'Monitoreo preventivo de la ODPE',
+          fuente_evidencia: 'Reporte del Informante',
+          fecha_creacion: new Date(fechaReporte).toISOString()
+        };
       }
+    });
 
+    setIsSubmitting(true);
+    try {
+      const result = await onReportSubmit(allNineReports);
+      setSubmitResult(result);
       setStep(3);
+    } catch (err: any) {
+      console.error('Error al enviar reporte:', err);
+      setSubmitResult({
+        success: false,
+        isOnline: false,
+        count: allNineReports.length,
+        error: err?.message || 'Error de conexión'
+      });
+      setStep(3);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   const handleBack = () => {
+    // If we have an active answer, save it before going back
+    if (hasProblem !== null) {
+      const currentData: QuestionData = {
+        hasProblem: hasProblem,
+        ocurrencia: hasProblem ? ocurrencia.trim() : 'Sin novedad / Situación normal',
+        consecuencia: hasProblem ? consecuencia.trim() : 'Sin afectación reportada',
+        accionesOdpe: hasProblem ? accionesOdpe.trim() : 'Monitoreo preventivo de la ODPE',
+        fuenteEvidencia: hasProblem ? fuenteEvidencia.trim() : 'Reporte de informante',
+        selectedFile: hasProblem ? selectedFile : null,
+      };
+      setAnswers(prev => ({ ...prev, [currentQuestion.id]: currentData }));
+    }
+
     if (currentQuestionIndex > 0) {
-      setCurrentQuestionIndex(prev => prev - 1);
-      // Remove last saved report from session list if going back
-      setSavedReportsInSession(prev => prev.slice(0, -1));
-      resetQuestionState();
+      const prevIndex = currentQuestionIndex - 1;
+      setCurrentQuestionIndex(prevIndex);
+      loadQuestionData(QUESTIONS[prevIndex].id, answers);
     } else {
       // Go back to informant info
       setStep(1);
@@ -297,8 +356,14 @@ export default function DistrictWizard({ onReportSubmit, onViewReportsClick }: D
   const handleRestart = () => {
     setStep(1);
     setCurrentQuestionIndex(0);
-    setSavedReportsInSession([]);
-    resetQuestionState();
+    setAnswers({});
+    setSubmitResult(null);
+    setHasProblem(null);
+    setOcurrencia('');
+    setConsecuencia('');
+    setAccionesOdpe('');
+    setFuenteEvidencia('');
+    setSelectedFile(null);
   };
 
   return (
@@ -620,8 +685,9 @@ export default function DistrictWizard({ onReportSubmit, onViewReportsClick }: D
           <div className="flex items-center justify-between gap-4 pt-4">
             <button
               id="btn-wizard-back"
+              disabled={isSubmitting}
               onClick={handleBack}
-              className="py-4 px-6 bg-white border-4 border-slate-300 text-slate-700 hover:bg-slate-50 active:scale-95 transition-all rounded-2xl font-black text-lg flex items-center gap-2 shadow-sm"
+              className="py-4 px-6 bg-white border-4 border-slate-300 text-slate-700 hover:bg-slate-50 active:scale-95 transition-all rounded-2xl font-black text-lg flex items-center gap-2 shadow-sm disabled:opacity-50"
             >
               <ChevronLeft className="w-6 h-6" /> Atrás
             </button>
@@ -629,16 +695,25 @@ export default function DistrictWizard({ onReportSubmit, onViewReportsClick }: D
             {/* Next button ONLY enabled if question is answered (either SÍ or NO) */}
             <button
               id="btn-wizard-next"
-              disabled={hasProblem === null}
+              disabled={hasProblem === null || isSubmitting}
               onClick={handleNext}
               className={`py-4 px-8 rounded-2xl font-black text-xl flex items-center gap-2 shadow-lg transition-all transform active:scale-95 ${
-                hasProblem !== null
+                hasProblem !== null && !isSubmitting
                   ? 'bg-blue-800 text-white cursor-pointer hover:bg-blue-900 ring-4 ring-blue-200'
                   : 'bg-slate-200 text-slate-400 border-2 border-slate-300 cursor-not-allowed opacity-60'
               }`}
             >
-              {currentQuestionIndex === QUESTIONS.length - 1 ? 'Terminar Reporte' : 'Siguiente Rubro'}
-              <ChevronRight className="w-6 h-6" />
+              {isSubmitting ? (
+                <>
+                  <div className="w-6 h-6 border-3 border-white border-t-transparent rounded-full animate-spin"></div>
+                  <span>Enviando a Supabase...</span>
+                </>
+              ) : (
+                <>
+                  <span>{currentQuestionIndex === QUESTIONS.length - 1 ? 'Finalizar y Enviar Reporte' : 'Siguiente Rubro'}</span>
+                  <ChevronRight className="w-6 h-6" />
+                </>
+              )}
             </button>
           </div>
         </div>
@@ -646,23 +721,116 @@ export default function DistrictWizard({ onReportSubmit, onViewReportsClick }: D
 
       {/* STEP 3: SUCCESS STATE */}
       {step === 3 && (
-        <div id="wizard-step-3" className="bg-blue-50 border-4 border-blue-300 rounded-3xl p-8 text-center space-y-6 shadow-xl animate-fadeIn">
-          <div className="inline-flex items-center justify-center bg-blue-100 border-4 border-blue-300 rounded-full w-24 h-24 text-blue-800 animate-bounce">
-            <Check className="w-14 h-14 stroke-[4px]" />
-          </div>
+        <div id="wizard-step-3" className="bg-white border-4 border-blue-200 rounded-3xl p-6 sm:p-10 text-center space-y-6 shadow-2xl animate-fadeIn">
+          
+          {submitResult?.isOnline ? (
+            <div className="inline-flex items-center justify-center bg-emerald-100 border-4 border-emerald-400 rounded-full w-24 h-24 text-emerald-700 animate-bounce">
+              <Check className="w-14 h-14 stroke-[4px]" />
+            </div>
+          ) : (
+            <div className="inline-flex items-center justify-center bg-amber-100 border-4 border-amber-400 rounded-full w-24 h-24 text-amber-800">
+              <AlertTriangle className="w-14 h-14 stroke-[3px]" />
+            </div>
+          )}
 
           <div className="space-y-3">
             <h2 className="text-3xl md:text-4xl font-black text-blue-950 flex items-center justify-center gap-2">
               <Sparkles className="w-8 h-8 text-red-500 animate-pulse" />
-              <span>¡Muchas Gracias, Coordinador!</span>
+              <span>¡Reporte Completado, Coordinador!</span>
               <Sparkles className="w-8 h-8 text-red-500 animate-pulse" />
             </h2>
-            <p className="text-xl text-blue-900 font-bold max-w-xl mx-auto">
-              El informe de coyuntura de la <span className="text-blue-950 font-black">{odpe}</span> para <span className="text-blue-950 font-black underline">{distritoZona}</span> ha sido guardado exitosamente y transmitido en tiempo real.
+            
+            <p className="text-lg sm:text-xl text-blue-900 font-bold max-w-xl mx-auto">
+              Informante: <span className="text-blue-950 font-black">{nombreCompleto}</span> | ODPE <span className="text-blue-950 font-black">{odpe}</span> (<span className="text-blue-950 font-black underline">{distritoZona}</span>)
             </p>
-            <div className="flex justify-center pt-2">
-              <AudioReader text={`¡Muchas gracias, coordinador! Tu informe de coyuntura ha sido guardado exitosamente y transmitido en tiempo real en la base de datos de Supabase. ¡Has hecho un gran trabajo de recopilación!`} />
+          </div>
+
+          {/* Sync Status Banner */}
+          <div className={`p-5 rounded-2xl border-2 text-left space-y-2 ${
+            submitResult?.isOnline
+              ? 'bg-emerald-50 border-emerald-300 text-emerald-950'
+              : 'bg-amber-50 border-amber-300 text-amber-950'
+          }`}>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 font-black text-base sm:text-lg">
+                <span className={`w-3 h-3 rounded-full ${submitResult?.isOnline ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`}></span>
+                <span>
+                  {submitResult?.isOnline 
+                    ? '✅ Guardado Exitosamente en Supabase Central' 
+                    : '⚠️ Guardado Únicamente en la Memoria de Este Teléfono'}
+                </span>
+              </div>
+              <span className="text-xs uppercase font-extrabold px-2.5 py-1 rounded-full bg-white/80 border">
+                {submitResult?.count || 9} Rubros Procesados
+              </span>
             </div>
+
+            <p className="text-sm font-medium leading-relaxed">
+              {submitResult?.isOnline
+                ? 'Los 9 rubros de tu evaluación distrital han sido transmitidos a la base de datos central en la nube y ya están disponibles en tiempo real en la sede central.'
+                : submitResult?.error || 'Este celular no tiene vinculada la base de datos de Supabase o no hay conexión de internet en este momento. Los datos quedaron a salvo en este dispositivo.'}
+            </p>
+
+            {!submitResult?.isOnline && (
+              <div className="pt-2 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  id="btn-retry-submit"
+                  disabled={isSubmitting}
+                  onClick={() => submitAllNineQuestions(answers)}
+                  className="px-4 py-2.5 bg-blue-800 hover:bg-blue-900 text-white font-black text-sm rounded-xl transition-all active:scale-95 shadow flex items-center gap-2"
+                >
+                  {isSubmitting ? 'Reintentando...' : '🔄 Reintentar Envío a Supabase'}
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Summary of 9 rubros */}
+          <div className="bg-slate-50 border-2 border-slate-200 rounded-2xl p-4 text-left space-y-3">
+            <h4 className="text-xs font-black text-slate-500 uppercase tracking-wider">Resumen de los 9 Rubros Evaluados:</h4>
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+              {QUESTIONS.map((q) => {
+                const ans = answers[q.id];
+                const hasProb = ans?.hasProblem;
+                return (
+                  <div key={q.id} className={`p-2.5 rounded-xl border text-xs flex items-center justify-between gap-2 ${
+                    hasProb ? 'bg-rose-50 border-rose-200 text-rose-900 font-bold' : 'bg-white border-slate-200 text-slate-700'
+                  }`}>
+                    <span className="truncate">{q.id}. {q.titulo.slice(0, 24)}...</span>
+                    <span className={`px-2 py-0.5 rounded-full font-black text-[10px] shrink-0 ${
+                      hasProb ? 'bg-rose-200 text-rose-900' : 'bg-emerald-100 text-emerald-800'
+                    }`}>
+                      {hasProb ? 'CON INCIDENCIA' : 'NORMAL'}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="flex justify-center pt-2">
+            <AudioReader text={`Reporte de coyuntura finalizado con éxito para la ODPE ${odpe}, distrito ${distritoZona}. Se evaluaron y registraron los nueve rubros.`} />
+          </div>
+
+          {/* Action buttons */}
+          <div className="pt-4 flex flex-col sm:flex-row items-center justify-center gap-3">
+            <button
+              type="button"
+              id="btn-new-report"
+              onClick={handleRestart}
+              className="w-full sm:w-auto px-8 py-4 bg-blue-800 hover:bg-blue-900 text-white font-black text-lg rounded-2xl shadow-lg transition-all active:scale-95"
+            >
+              Registrar Nuevo Informe
+            </button>
+            <button
+              type="button"
+              id="btn-view-dashboard"
+              onClick={onViewReportsClick}
+              className="w-full sm:w-auto px-6 py-4 bg-white border-2 border-slate-300 hover:bg-slate-50 text-slate-700 font-black text-lg rounded-2xl shadow transition-all active:scale-95"
+            >
+              Ver Panel Central
+            </button>
           </div>
 
         </div>
@@ -670,3 +838,4 @@ export default function DistrictWizard({ onReportSubmit, onViewReportsClick }: D
     </div>
   );
 }
+
