@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="blueGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1E3A8A" />
+      <stop offset="100%" stop-color="#0F172A" />
+    </linearGradient>
+    <linearGradient id="redGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#EF4444" />
+      <stop offset="100%" stop-color="#991B1B" />
+    </linearGradient>
+  </defs>
+  <!-- Background Rounded Rect -->
+  <rect width="512" height="512" rx="128" fill="url(#blueGrad)" />
+  
+  <!-- Outer Ring -->
+  <circle cx="256" cy="256" r="220" fill="none" stroke="#FFFFFF" stroke-width="16" opacity="0.15" />
+  
+  <!-- Inner Red Banner / Seal Emblem -->
+  <circle cx="256" cy="256" r="150" fill="url(#redGrad)" stroke="#FFFFFF" stroke-width="12" />
+  
+  <!-- Stylized Ballot Box / Check Box White -->
+  <g transform="translate(156, 156)">
+    <rect x="20" y="20" width="160" height="160" rx="24" fill="#FFFFFF" shadow="0 10px 20px rgba(0,0,0,0.3)" />
+    <!-- Blue ONPE Checkmark inside box -->
+    <path d="M50 100 L85 135 L150 65" fill="none" stroke="#1E3A8A" stroke-width="24" stroke-linecap="round" stroke-linejoin="round" />
+  </g>
+  
+  <!-- Label Banner at the bottom -->
+  <text x="256" y="445" font-family="'Plus Jakarta Sans', 'Segoe UI', Arial, sans-serif" font-weight="900" font-size="44" fill="#FFFFFF" text-anchor="middle" letter-spacing="4">MACE</text>
+</svg>

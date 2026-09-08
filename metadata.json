@@ -1,0 +1,6 @@
+{
+  "name": "INFORME SEMANAL DE COYUNTURA – ODPE / MACE",
+  "description": "Un sistema amigable y colorido para el reporte y control de incidencias en distritos, diseñado especialmente para adultos mayores y conectado en tiempo real.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
