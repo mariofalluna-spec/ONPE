@@ -125,18 +125,20 @@ export default function App() {
   const [showPasswordModal, setShowPasswordModal] = useState<boolean>(false);
   const [passwordInput, setPasswordInput] = useState<string>('');
   const [passwordError, setPasswordError] = useState<string>('');
-  const [pendingAction, setPendingAction] = useState<'dashboard' | 'excel' | null>(null);
+  const [pendingAction, setPendingAction] = useState<'dashboard' | 'excel' | 'config' | null>(null);
 
   // Hidden configuration access (accessible only via secret gesture)
   const [showConfigAccess, setShowConfigAccess] = useState(false);
   const [logoClickCount, setLogoClickCount] = useState(0);
 
-  const handleAccessAttempt = (action: 'dashboard' | 'excel') => {
+  const handleAccessAttempt = (action: 'dashboard' | 'excel' | 'config') => {
     if (isAuthenticated) {
       if (action === 'dashboard') {
         setActiveTab('dashboard');
       } else if (action === 'excel') {
         exportToExcel(reports);
+      } else if (action === 'config') {
+        setActiveTab('config');
       }
     } else {
       setPendingAction(action);
@@ -150,6 +152,7 @@ export default function App() {
     e.preventDefault();
     if (passwordInput === 'mario') {
       setIsAuthenticated(true);
+      setShowConfigAccess(true);
       setShowPasswordModal(false);
       setPasswordError('');
       
@@ -158,6 +161,10 @@ export default function App() {
         setActiveTab('dashboard');
       } else if (pendingAction === 'excel') {
         exportToExcel(reports);
+      } else if (pendingAction === 'config') {
+        setActiveTab('config');
+      } else {
+        setActiveTab('dashboard');
       }
       setPendingAction(null);
     } else {
@@ -167,22 +174,23 @@ export default function App() {
 
   const handleSignOut = () => {
     setIsAuthenticated(false);
-    if (activeTab === 'dashboard') {
-      setActiveTab('wizard');
-    }
+    setShowConfigAccess(false);
+    setActiveTab('wizard');
   };
 
   const handleLogoClick = () => {
     setLogoClickCount((prev) => {
       const next = prev + 1;
+      
+      // Reset the counter after 3 seconds of no clicks to prevent accidental trigger
+      setTimeout(() => {
+        setLogoClickCount((curr) => (curr === next ? 0 : curr));
+      }, 3000);
+
       if (next >= 5) {
-        setShowConfigAccess((show) => {
-          const newState = !show;
-          if (!newState && activeTab === 'config') {
-            setActiveTab('wizard');
-          }
-          return newState;
-        });
+        setShowConfigAccess(true);
+        // Automatically trigger the password modal access attempt to unlock admin mode
+        handleAccessAttempt('dashboard');
         return 0; // reset counter
       }
       return next;
@@ -448,76 +456,80 @@ export default function App() {
             onClick={handleLogoClick} 
           />
           
-          {/* Extreme Right Navigation & Download Options */}
-          <div className="flex flex-wrap items-center justify-center md:justify-end gap-2 sm:gap-2.5">
-            {/* Option 1: Registrar */}
-            <button
-              id="tab-wizard"
-              onClick={() => setActiveTab('wizard')}
-              className={`px-3.5 py-2 sm:px-4.5 sm:py-2.5 rounded-xl font-extrabold text-xs sm:text-sm flex items-center gap-1.5 transition-all active:scale-95 border-2 ${
-                activeTab === 'wizard'
-                  ? 'bg-blue-800 border-blue-800 text-white shadow-md shadow-blue-100'
-                  : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
-              }`}
-            >
-              <span className="text-sm sm:text-base">📝</span>
-              <span>Registrar</span>
-            </button>
+          {/* Extreme Right Navigation & Download Options - Only shown when authenticated */}
+          {isAuthenticated ? (
+            <div className="flex flex-wrap items-center justify-center md:justify-end gap-2 sm:gap-2.5">
+              {/* Option 1: Registrar */}
+              <button
+                id="tab-wizard"
+                onClick={() => setActiveTab('wizard')}
+                className={`px-3.5 py-2 sm:px-4.5 sm:py-2.5 rounded-xl font-extrabold text-xs sm:text-sm flex items-center gap-1.5 transition-all active:scale-95 border-2 ${
+                  activeTab === 'wizard'
+                    ? 'bg-blue-800 border-blue-800 text-white shadow-md shadow-blue-100'
+                    : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                }`}
+              >
+                <span className="text-sm sm:text-base">📝</span>
+                <span>Registrar</span>
+              </button>
 
-            {/* Option 2: Ver Reportes */}
-            <button
-              id="tab-dashboard"
-              onClick={() => handleAccessAttempt('dashboard')}
-              className={`px-3.5 py-2 sm:px-4.5 sm:py-2.5 rounded-xl font-extrabold text-xs sm:text-sm flex items-center gap-1.5 transition-all active:scale-95 border-2 ${
-                activeTab === 'dashboard'
-                  ? 'bg-blue-800 border-blue-800 text-white shadow-md shadow-blue-100'
-                  : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
-              }`}
-            >
-              <span className="text-sm sm:text-base">📊</span>
-              <span>Reportes</span>
-            </button>
+              {/* Option 2: Ver Reportes */}
+              <button
+                id="tab-dashboard"
+                onClick={() => setActiveTab('dashboard')}
+                className={`px-3.5 py-2 sm:px-4.5 sm:py-2.5 rounded-xl font-extrabold text-xs sm:text-sm flex items-center gap-1.5 transition-all active:scale-95 border-2 ${
+                  activeTab === 'dashboard'
+                    ? 'bg-blue-800 border-blue-800 text-white shadow-md shadow-blue-100'
+                    : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                }`}
+              >
+                <span className="text-sm sm:text-base">📊</span>
+                <span>Reportes</span>
+              </button>
 
-            {/* Option 3: Descargar Excel */}
-            <button
-              id="btn-download-excel-header"
-              onClick={() => handleAccessAttempt('excel')}
-              className="px-3.5 py-2 sm:px-4.5 sm:py-2.5 rounded-xl font-extrabold text-xs sm:text-sm flex items-center gap-1.5 transition-all active:scale-95 border-2 bg-emerald-700 border-emerald-700 text-white hover:bg-emerald-800 shadow-md shadow-emerald-50"
-              title="Descargar todos los reportes en formato Excel (.xls)"
-            >
-              <Download className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-              <span>Excel</span>
-            </button>
+              {/* Option 3: Descargar Excel */}
+              <button
+                id="btn-download-excel-header"
+                onClick={() => exportToExcel(reports)}
+                className="px-3.5 py-2 sm:px-4.5 sm:py-2.5 rounded-xl font-extrabold text-xs sm:text-sm flex items-center gap-1.5 transition-all active:scale-95 border-2 bg-emerald-700 border-emerald-700 text-white hover:bg-emerald-800 shadow-md shadow-emerald-50"
+                title="Descargar todos los reportes en formato Excel (.xls)"
+              >
+                <Download className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                <span>Excel</span>
+              </button>
 
-            {/* Lock / Close session button */}
-            {isAuthenticated && (
+              {/* Option 4: Configuración Base de Datos (Supabase) */}
+              <button
+                id="tab-config"
+                onClick={() => setActiveTab('config')}
+                className={`px-3.5 py-2 sm:px-4.5 sm:py-2.5 rounded-xl font-extrabold text-xs sm:text-sm flex items-center gap-1.5 transition-all active:scale-95 border-2 ${
+                  activeTab === 'config'
+                    ? 'bg-blue-800 border-blue-800 text-white shadow-md shadow-blue-100'
+                    : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                }`}
+                title="Opciones de Conexión de Datos (Supabase)"
+              >
+                <Settings className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                <span>Base de Datos</span>
+              </button>
+
+              {/* Option 5: Cerrar sesión / Bloquear */}
               <button
                 id="btn-signout"
                 onClick={handleSignOut}
-                className="px-3.5 py-2 sm:px-4.5 sm:py-2.5 rounded-xl font-extrabold text-xs sm:text-sm bg-rose-50 border-2 border-rose-100 text-rose-700 hover:bg-rose-100 transition-all active:scale-95 flex items-center gap-1.5"
-                title="Cerrar sesión protegida"
+                className="px-3.5 py-2 sm:px-4.5 sm:py-2.5 rounded-xl font-extrabold text-xs sm:text-sm bg-rose-50 border-2 border-rose-200 text-rose-700 hover:bg-rose-100 transition-all active:scale-95 flex items-center gap-1.5"
+                title="Bloquear panel y ocultar opciones administrativas"
               >
                 <span className="text-sm sm:text-base">🔒</span>
                 <span>Bloquear</span>
               </button>
-            )}
-
-            {/* Hidden Config Button - Activated by secret gesture */}
-            {showConfigAccess && (
-              <button
-                id="tab-config"
-                onClick={() => setActiveTab('config')}
-                className={`p-2 rounded-xl transition-all border-2 shadow-sm ${
-                  activeTab === 'config'
-                    ? 'bg-blue-50 border-blue-600 text-blue-950 scale-105'
-                    : 'bg-slate-100 border-slate-200 text-slate-600 hover:text-slate-900'
-                }`}
-                title="Opciones de Conexión de Datos (Supabase)"
-              >
-                <Settings className="w-4.5 h-4.5 sm:w-5 sm:h-5" />
-              </button>
-            )}
-          </div>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 text-xs font-semibold text-slate-500 bg-slate-100/90 px-3.5 py-2 rounded-full border border-slate-200">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+              <span className="font-bold text-slate-700">Portal de Registro Oficial</span>
+            </div>
+          )}
         </div>
       </header>
 

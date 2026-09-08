@@ -9,7 +9,7 @@ export const OnpeLogo: React.FC<OnpeLogoProps> = ({ className = 'h-16 md:h-20 w-
   return (
     <div 
       id="onpe-official-logo-wrapper" 
-      className={`flex items-center justify-center select-none cursor-pointer ${className}`}
+      className={`flex items-center justify-center select-none cursor-pointer active:scale-98 transition-transform touch-manipulation ${className}`}
       onClick={onClick}
     >
       <svg 
