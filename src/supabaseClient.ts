@@ -12,57 +12,102 @@ export interface SupabaseConfigKeys {
   anonKey: string;
 }
 
-export function getStoredSupabaseConfig(): SupabaseConfigKeys | null {
-  // 1. Check if configuration was passed in the URL (Hash or Query param)
-  // This allows the admin to send an auto-configured link to hundreds of mobile devices!
-  if (typeof window !== 'undefined') {
-    try {
-      // Check hash #cfg=BASE64
-      const hash = window.location.hash;
-      if (hash && hash.includes('cfg=')) {
-        const match = hash.match(/cfg=([^&]+)/);
-        if (match && match[1]) {
-          const decodedStr = decodeURIComponent(match[1]);
-          const decoded = JSON.parse(atob(decodedStr));
-          if (decoded.url && decoded.anonKey) {
-            saveStoredSupabaseConfig(decoded.url, decoded.anonKey);
-            // Clean up the URL bar so the hash doesn't linger
-            window.history.replaceState(null, '', window.location.pathname + window.location.search);
-            return { url: decoded.url, anonKey: decoded.anonKey };
-          }
-        }
-      }
-
-      // Check query params ?supa_url=...&supa_key=...
-      const searchParams = new URLSearchParams(window.location.search);
-      const qUrl = searchParams.get('supa_url');
-      const qKey = searchParams.get('supa_key');
-      if (qUrl && qKey) {
-        saveStoredSupabaseConfig(qUrl, qKey);
-        // Clean query params
-        searchParams.delete('supa_url');
-        searchParams.delete('supa_key');
-        const newSearch = searchParams.toString() ? `?${searchParams.toString()}` : '';
-        window.history.replaceState(null, '', window.location.pathname + newSearch);
-        return { url: qUrl, anonKey: qKey };
-      }
-    } catch (err) {
-      console.warn('No se pudo extraer configuración desde la URL:', err);
-    }
+export async function initGlobalSupabaseConfig(): Promise<SupabaseConfigKeys | null> {
+  // 1. Check if configuration was passed in the URL
+  const fromUrl = checkUrlConfig();
+  if (fromUrl) {
+    syncConfigToServer(fromUrl.url, fromUrl.anonKey);
+    return fromUrl;
   }
 
   // 2. Check localStorage
+  const local = getLocalConfig();
+  if (local) {
+    syncConfigToServer(local.url, local.anonKey);
+    return local;
+  }
+
+  // 3. Fetch from server endpoint /api/config (allows any mobile user worldwide to connect instantly)
+  try {
+    const res = await fetch('/api/config');
+    if (res.ok) {
+      const data = await res.json();
+      if (data?.configured && data?.url && data?.anonKey) {
+        saveStoredSupabaseConfig(data.url, data.anonKey);
+        return { url: data.url, anonKey: data.anonKey };
+      }
+    }
+  } catch (e) {
+    console.warn('No se pudo consultar /api/config:', e);
+  }
+
+  // 4. Check Vite env variables
+  const envUrl = (import.meta as any).env?.VITE_SUPABASE_URL;
+  const envKey = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY;
+  if (envUrl && envKey) {
+    saveStoredSupabaseConfig(envUrl, envKey);
+    syncConfigToServer(envUrl, envKey);
+    return { url: envUrl, anonKey: envKey };
+  }
+
+  return null;
+}
+
+function checkUrlConfig(): SupabaseConfigKeys | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    // Check hash #cfg=BASE64
+    const hash = window.location.hash;
+    if (hash && hash.includes('cfg=')) {
+      const match = hash.match(/cfg=([^&]+)/);
+      if (match && match[1]) {
+        const decodedStr = decodeURIComponent(match[1]);
+        const decoded = JSON.parse(atob(decodedStr));
+        if (decoded.url && decoded.anonKey) {
+          saveStoredSupabaseConfig(decoded.url, decoded.anonKey);
+          window.history.replaceState(null, '', window.location.pathname + window.location.search);
+          return { url: decoded.url, anonKey: decoded.anonKey };
+        }
+      }
+    }
+
+    // Check query params ?supa_url=...&supa_key=...
+    const searchParams = new URLSearchParams(window.location.search);
+    const qUrl = searchParams.get('supa_url');
+    const qKey = searchParams.get('supa_key');
+    if (qUrl && qKey) {
+      saveStoredSupabaseConfig(qUrl, qKey);
+      searchParams.delete('supa_url');
+      searchParams.delete('supa_key');
+      const newSearch = searchParams.toString() ? `?${searchParams.toString()}` : '';
+      window.history.replaceState(null, '', window.location.pathname + newSearch);
+      return { url: qUrl, anonKey: qKey };
+    }
+  } catch (err) {
+    console.warn('No se pudo extraer configuración desde la URL:', err);
+  }
+  return null;
+}
+
+function getLocalConfig(): SupabaseConfigKeys | null {
+  if (typeof window === 'undefined') return null;
   const localUrl = localStorage.getItem('REPORTES_SUPABASE_URL');
   const localKey = localStorage.getItem('REPORTES_SUPABASE_ANON_KEY');
-  
   if (localUrl && localKey) {
     return { url: localUrl, anonKey: localKey };
   }
+  return null;
+}
 
-  // 3. Check env variables from Vite
+export function getStoredSupabaseConfig(): SupabaseConfigKeys | null {
+  const fromUrl = checkUrlConfig();
+  if (fromUrl) return fromUrl;
+
+  const local = getLocalConfig();
+  if (local) return local;
+
   const envUrl = (import.meta as any).env?.VITE_SUPABASE_URL;
   const envKey = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY;
-
   if (envUrl && envKey) {
     return { url: envUrl, anonKey: envKey };
   }
@@ -70,10 +115,24 @@ export function getStoredSupabaseConfig(): SupabaseConfigKeys | null {
   return null;
 }
 
+export async function syncConfigToServer(url: string, anonKey: string) {
+  try {
+    await fetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: url.trim(), anonKey: anonKey.trim() })
+    });
+  } catch (e) {
+    // ignore
+  }
+}
+
 export function saveStoredSupabaseConfig(url: string, anonKey: string) {
   if (typeof window !== 'undefined') {
     localStorage.setItem('REPORTES_SUPABASE_URL', url.trim());
     localStorage.setItem('REPORTES_SUPABASE_ANON_KEY', anonKey.trim());
+    // Also broadcast to server
+    syncConfigToServer(url, anonKey);
   }
 }
 
@@ -150,33 +209,42 @@ CREATE TABLE IF NOT EXISTS public.${SUPABASE_TABLE_NAME} (
     fecha_creacion TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
--- 2. Habilita la seguridad por filas (Row Level Security)
+-- 2. Asegura que todas las columnas existan incluso si la tabla fue creada previamente
+ALTER TABLE public.${SUPABASE_TABLE_NAME} ADD COLUMN IF NOT EXISTS nombre_informante TEXT;
+ALTER TABLE public.${SUPABASE_TABLE_NAME} ADD COLUMN IF NOT EXISTS odpe TEXT;
+ALTER TABLE public.${SUPABASE_TABLE_NAME} ADD COLUMN IF NOT EXISTS distrito TEXT;
+ALTER TABLE public.${SUPABASE_TABLE_NAME} ADD COLUMN IF NOT EXISTS rubro_id INTEGER;
+ALTER TABLE public.${SUPABASE_TABLE_NAME} ADD COLUMN IF NOT EXISTS categoria TEXT;
+ALTER TABLE public.${SUPABASE_TABLE_NAME} ADD COLUMN IF NOT EXISTS pregunta_texto TEXT;
+ALTER TABLE public.${SUPABASE_TABLE_NAME} ADD COLUMN IF NOT EXISTS tiene_problema BOOLEAN DEFAULT TRUE;
+ALTER TABLE public.${SUPABASE_TABLE_NAME} ADD COLUMN IF NOT EXISTS ocurrencia TEXT;
+ALTER TABLE public.${SUPABASE_TABLE_NAME} ADD COLUMN IF NOT EXISTS consecuencia TEXT;
+ALTER TABLE public.${SUPABASE_TABLE_NAME} ADD COLUMN IF NOT EXISTS acciones_odpe TEXT;
+ALTER TABLE public.${SUPABASE_TABLE_NAME} ADD COLUMN IF NOT EXISTS fuente_evidencia TEXT;
+ALTER TABLE public.${SUPABASE_TABLE_NAME} ADD COLUMN IF NOT EXISTS fecha_creacion TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now());
+
+-- 3. Habilita la seguridad por filas (Row Level Security)
 ALTER TABLE public.${SUPABASE_TABLE_NAME} ENABLE ROW LEVEL SECURITY;
 
--- 3. Limpia políticas anteriores para evitar duplicados si se vuelve a ejecutar
+-- 4. Limpia políticas anteriores para evitar conflictos o bloqueos
 DROP POLICY IF EXISTS "Permitir lectura pública" ON public.${SUPABASE_TABLE_NAME};
 DROP POLICY IF EXISTS "Permitir inserción pública" ON public.${SUPABASE_TABLE_NAME};
 DROP POLICY IF EXISTS "Permitir actualización pública" ON public.${SUPABASE_TABLE_NAME};
 DROP POLICY IF EXISTS "Permitir eliminación pública" ON public.${SUPABASE_TABLE_NAME};
 DROP POLICY IF EXISTS "Permitir acceso completo" ON public.${SUPABASE_TABLE_NAME};
 
--- 4. Crea las políticas para que la app y los celulares de los informantes puedan registrar y consultar
-CREATE POLICY "Permitir lectura pública" ON public.${SUPABASE_TABLE_NAME}
-    FOR SELECT USING (true);
+-- 5. Crea la política universal para que cualquier celular en el mundo pueda registrar e interactuar
+CREATE POLICY "Permitir acceso completo" ON public.${SUPABASE_TABLE_NAME}
+    FOR ALL
+    TO public, anon, authenticated
+    USING (true)
+    WITH CHECK (true);
 
-CREATE POLICY "Permitir inserción pública" ON public.${SUPABASE_TABLE_NAME}
-    FOR INSERT WITH CHECK (true);
+-- 6. Otorga todos los permisos a los roles de Supabase
+GRANT ALL ON TABLE public.${SUPABASE_TABLE_NAME} TO anon, authenticated, service_role, postgres;
+GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
 
-CREATE POLICY "Permitir actualización pública" ON public.${SUPABASE_TABLE_NAME}
-    FOR UPDATE USING (true);
-
-CREATE POLICY "Permitir eliminación pública" ON public.${SUPABASE_TABLE_NAME}
-    FOR DELETE USING (true);
-
--- 5. Otorga permisos de acceso a los roles de Supabase
-GRANT ALL ON TABLE public.${SUPABASE_TABLE_NAME} TO anon, authenticated, service_role;
-
--- 6. Habilita la replicación en tiempo real (Realtime)
+-- 7. Habilita la replicación en tiempo real (Realtime)
 DO $$
 BEGIN
   IF NOT EXISTS (

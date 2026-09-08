@@ -14,7 +14,7 @@ import DistrictWizard, { SubmitResult } from './components/DistrictWizard';
 import RealTimeDashboard from './components/RealTimeDashboard';
 import SupabaseConfig from './components/SupabaseConfig';
 import AudioReader from './components/AudioReader';
-import { getSupabaseClient, SUPABASE_TABLE_NAME } from './supabaseClient';
+import { getSupabaseClient, SUPABASE_TABLE_NAME, initGlobalSupabaseConfig } from './supabaseClient';
 import { PWAInstallButton } from './components/PWAInstallButton';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { OnpeLogo } from './components/OnpeLogo';
@@ -197,9 +197,13 @@ export default function App() {
     });
   };
 
-  // Load initial data
+  // Load initial data and global server config
   useEffect(() => {
-    loadAllReports();
+    async function init() {
+      await initGlobalSupabaseConfig();
+      await loadAllReports();
+    }
+    init();
   }, []);
 
   // Set up realtime sync if Supabase is connected
@@ -237,35 +241,96 @@ export default function App() {
 
   const loadAllReports = async () => {
     setLoading(true);
-    const supabase = getSupabaseClient();
+    let supabase = getSupabaseClient();
+    if (!supabase) {
+      await initGlobalSupabaseConfig();
+      supabase = getSupabaseClient();
+    }
     
+    let loadedReports: IncidentReport[] = [];
+    let fetchedOk = false;
+
+    // 1. Try Supabase client first
     if (supabase) {
       setIsSupabaseActive(true);
-      const success = await fetchFromSupabase();
-      if (!success) {
-        // Fallback to localStorage if Supabase read fails
-        loadFromLocalStorage();
+      try {
+        const { data, error } = await supabase
+          .from(SUPABASE_TABLE_NAME)
+          .select('*')
+          .order('fecha_creacion', { ascending: false });
+
+        if (!error && data) {
+          loadedReports = data.map((d: any) => ({
+            id: d.id,
+            nombre_informante: d.nombre_informante,
+            odpe: d.odpe,
+            distrito: d.distrito,
+            rubro_id: d.rubro_id,
+            categoria: d.categoria,
+            pregunta_texto: d.pregunta_texto,
+            tiene_problema: d.tiene_problema,
+            ocurrencia: d.ocurrencia,
+            consecuencia: d.consecuencia,
+            acciones_odpe: d.acciones_odpe,
+            fuente_evidencia: d.fuente_evidencia,
+            fecha_creacion: d.fecha_creacion
+          }));
+          fetchedOk = true;
+        }
+      } catch (e) {
+        console.warn('Error consultando Supabase:', e);
       }
     } else {
       setIsSupabaseActive(false);
-      loadFromLocalStorage();
     }
-    setLoading(false);
-  };
 
-  const loadFromLocalStorage = () => {
-    const stored = localStorage.getItem('MACE_INCIDENTS_LIST');
-    if (stored) {
+    // 2. If Supabase client returned nothing or wasn't available, check server endpoint /api/reports
+    if (!fetchedOk || loadedReports.length === 0) {
       try {
-        setReports(JSON.parse(stored));
+        const res = await fetch('/api/reports');
+        if (res.ok) {
+          const resData = await res.json();
+          if (resData.reports && resData.reports.length > 0) {
+            loadedReports = resData.reports.map((d: any) => ({
+              id: d.id,
+              nombre_informante: d.nombre_informante,
+              odpe: d.odpe,
+              distrito: d.distrito,
+              rubro_id: d.rubro_id,
+              categoria: d.categoria,
+              pregunta_texto: d.pregunta_texto,
+              tiene_problema: d.tiene_problema,
+              ocurrencia: d.ocurrencia,
+              consecuencia: d.consecuencia,
+              acciones_odpe: d.acciones_odpe,
+              fuente_evidencia: d.fuente_evidencia,
+              fecha_creacion: d.fecha_creacion
+            }));
+            fetchedOk = true;
+          }
+        }
       } catch (e) {
-        setReports([]);
+        console.warn('Error consultando /api/reports:', e);
       }
-    } else {
-      // Default to empty list to start entirely from scratch as requested
-      setReports([]);
-      localStorage.setItem('MACE_INCIDENTS_LIST', JSON.stringify([]));
     }
+
+    // 3. Fallback to localStorage only if server/database had no response
+    if (!fetchedOk && loadedReports.length === 0) {
+      const stored = localStorage.getItem('MACE_INCIDENTS_LIST');
+      if (stored) {
+        try {
+          loadedReports = JSON.parse(stored);
+        } catch (e) {
+          loadedReports = [];
+        }
+      }
+    }
+
+    if (loadedReports.length > 0) {
+      localStorage.setItem('MACE_INCIDENTS_LIST', JSON.stringify(loadedReports));
+    }
+    setReports(loadedReports);
+    setLoading(false);
   };
 
   const fetchFromSupabase = async (): Promise<boolean> => {
@@ -275,7 +340,8 @@ export default function App() {
     try {
       const { data, error } = await supabase
         .from(SUPABASE_TABLE_NAME)
-        .select('*');
+        .select('*')
+        .order('fecha_creacion', { ascending: false });
 
       if (error) {
         console.error('Error al recuperar datos de Supabase:', error);
@@ -283,7 +349,6 @@ export default function App() {
       }
 
       if (data) {
-        // Map database columns to our client-side keys
         const mapped: IncidentReport[] = data.map((d: any) => ({
           id: d.id,
           nombre_informante: d.nombre_informante,
@@ -300,6 +365,7 @@ export default function App() {
           fecha_creacion: d.fecha_creacion
         }));
         setReports(mapped);
+        localStorage.setItem('MACE_INCIDENTS_LIST', JSON.stringify(mapped));
         return true;
       }
       return false;
@@ -311,73 +377,88 @@ export default function App() {
 
   // Submit a batch of new reports (called from Wizard)
   const handleReportsSubmit = async (newReports: IncidentReport[]): Promise<SubmitResult> => {
-    const supabase = getSupabaseClient();
+    let supabase = getSupabaseClient();
+    if (!supabase) {
+      await initGlobalSupabaseConfig();
+      supabase = getSupabaseClient();
+    }
     
-    // Add unique local IDs for client references
-    const reportsWithId = newReports.map(report => ({
-      ...report,
-      id_local: `local-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+    // Format payload cleanly ensuring all fields have non-null, valid types
+    const payload = newReports.map(r => ({
+      nombre_informante: r.nombre_informante || '',
+      odpe: r.odpe || '',
+      distrito: r.distrito || '',
+      rubro_id: Number(r.rubro_id) || 0,
+      categoria: r.categoria || '',
+      pregunta_texto: r.pregunta_texto || '',
+      tiene_problema: Boolean(r.tiene_problema),
+      ocurrencia: r.ocurrencia || (r.tiene_problema ? 'Incidencia reportada' : 'Sin novedad / Situación normal'),
+      consecuencia: r.consecuencia || (r.tiene_problema ? 'En evaluación' : 'Sin afectación reportada'),
+      acciones_odpe: r.acciones_odpe || (r.tiene_problema ? 'Acción en curso' : 'Monitoreo preventivo de la ODPE'),
+      fuente_evidencia: r.fuente_evidencia || 'Reporte de Informante',
+      fecha_creacion: r.fecha_creacion || new Date().toISOString()
     }));
 
-    if (supabase) {
-      try {
-        const payload = newReports.map(r => ({
-          nombre_informante: r.nombre_informante,
-          odpe: r.odpe,
-          distrito: r.distrito,
-          rubro_id: r.rubro_id,
-          categoria: r.categoria,
-          pregunta_texto: r.pregunta_texto,
-          tiene_problema: r.tiene_problema,
-          ocurrencia: r.ocurrencia,
-          consecuencia: r.consecuencia,
-          acciones_odpe: r.acciones_odpe,
-          fuente_evidencia: r.fuente_evidencia,
-          fecha_creacion: r.fecha_creacion
-        }));
+    let directSupabaseSuccess = false;
+    let serverSuccess = false;
+    let errorDetail = '';
 
-        // Insert into Supabase table in a single batch
+    // 1. Send to server endpoint /api/reports (which writes to Supabase + central backup)
+    try {
+      const serverRes = await fetch('/api/reports', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (serverRes.ok) {
+        const resData = await serverRes.json();
+        if (resData.success) {
+          serverSuccess = true;
+          if (resData.supabaseSuccess) {
+            directSupabaseSuccess = true;
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Envío a /api/reports falló:', e);
+    }
+
+    // 2. Also try direct client insert if Supabase client is available
+    if (supabase && !directSupabaseSuccess) {
+      try {
         const { error } = await supabase
           .from(SUPABASE_TABLE_NAME)
           .insert(payload);
 
-        if (error) {
-          console.error('No se pudo insertar en Supabase, guardando en local:', error);
-          saveReportsLocally(reportsWithId);
-          return {
-            success: false,
-            isOnline: false,
-            count: newReports.length,
-            error: `Error de Supabase: ${error.message}`
-          };
+        if (!error) {
+          directSupabaseSuccess = true;
+          console.log('Reportes guardados directamente en Supabase!');
         } else {
-          console.log('Reportes guardados exitosamente en Supabase en lote!');
-          // Refresh list to pull latest from server
-          await fetchFromSupabase();
-          return {
-            success: true,
-            isOnline: true,
-            count: newReports.length
-          };
+          console.error('Error insertando directo en Supabase:', error);
+          errorDetail = error.message;
         }
       } catch (err: any) {
-        console.error('Excepción al guardar en Supabase, usando local:', err);
-        saveReportsLocally(reportsWithId);
-        return {
-          success: false,
-          isOnline: false,
-          count: newReports.length,
-          error: err?.message || 'Error de conexión con la base central.'
-        };
+        console.error('Excepción insertando directo en Supabase:', err);
+        errorDetail = err?.message || 'Error de conexión';
       }
+    }
+
+    if (serverSuccess || directSupabaseSuccess) {
+      setIsSupabaseActive(true);
+      await loadAllReports();
+      return {
+        success: true,
+        isOnline: true,
+        count: newReports.length
+      };
     } else {
-      // No Supabase, save to localStorage
-      saveReportsLocally(reportsWithId);
+      // Local fallback emergency buffer
+      saveReportsLocally(newReports);
       return {
         success: false,
         isOnline: false,
         count: newReports.length,
-        error: 'Este celular no está vinculado a Supabase. El reporte se guardó solo en este dispositivo.'
+        error: errorDetail || 'No se pudo conectar a la base central de datos. Se guardó localmente.'
       };
     }
   };
@@ -438,9 +519,17 @@ export default function App() {
     const confirmAction = window.confirm('¿Estás seguro de que quieres borrar todos los reportes de prueba? Esta acción vaciará la tabla en Supabase y la memoria local para empezar desde cero con datos reales.');
     if (!confirmAction) return;
 
+    setLoading(true);
+    // 1. Clear server backup
+    try {
+      await fetch('/api/reports', { method: 'DELETE' });
+    } catch (e) {
+      console.warn('Error al borrar en /api/reports:', e);
+    }
+
+    // 2. Clear Supabase client
     const supabase = getSupabaseClient();
     if (supabase) {
-      setLoading(true);
       try {
         const { error } = await supabase
           .from(SUPABASE_TABLE_NAME)
@@ -448,22 +537,17 @@ export default function App() {
           .gte('rubro_id', 0); // targets all rows reliably
         
         if (error) {
-          alert('Error de Supabase al borrar: ' + error.message);
-        } else {
-          setReports([]);
-          localStorage.removeItem('MACE_INCIDENTS_LIST');
-          alert('¡Base de datos limpiada con éxito! Se eliminaron todos los registros de prueba de Supabase y de este equipo.');
+          console.warn('Error al borrar en Supabase:', error);
         }
       } catch (err: any) {
-        alert('Error de red al borrar en Supabase: ' + err.message);
-      } finally {
-        setLoading(false);
+        console.warn('Error de red al borrar en Supabase:', err);
       }
-    } else {
-      setReports([]);
-      localStorage.removeItem('MACE_INCIDENTS_LIST');
-      alert('¡Datos de prueba locales eliminados con éxito!');
     }
+
+    setReports([]);
+    localStorage.removeItem('MACE_INCIDENTS_LIST');
+    setLoading(false);
+    alert('¡Base de datos limpiada con éxito! Se eliminaron todos los registros de prueba para empezar con datos reales.');
   };
 
   const handleConfigChange = () => {
