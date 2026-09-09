@@ -23,9 +23,11 @@ if (!fs.existsSync(DATA_DIR)) {
 const CONFIG_FILE = path.join(DATA_DIR, 'supabase-config.json');
 const REPORTS_BACKUP_FILE = path.join(DATA_DIR, 'reports-backup.json');
 const SUPABASE_TABLE_NAME = 'incidencias_distrito';
+const DEFAULT_SUPABASE_URL = 'https://kcunaxyxanmokzvnhnsi.supabase.co';
+const DEFAULT_SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtjdW5heHl4YW5tb2t6dm5obnNpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg4MDgxNDUsImV4cCI6MjEwNDM4NDE0NX0.WpavQ9W4btGgfhQwvbU_XDcWHrktyChKJijOQoAP5Rk';
 
 // Helper to read server config
-function getServerConfig(): { url: string; anonKey: string } | null {
+function getServerConfig(): { url: string; anonKey: string } {
   // 1. Check config file
   if (fs.existsSync(CONFIG_FILE)) {
     try {
@@ -45,7 +47,7 @@ function getServerConfig(): { url: string; anonKey: string } | null {
     return { url: envUrl.trim(), anonKey: envKey.trim() };
   }
 
-  return null;
+  return { url: DEFAULT_SUPABASE_URL, anonKey: DEFAULT_SUPABASE_KEY };
 }
 
 // Helper to save server config
@@ -223,15 +225,46 @@ app.post('/api/reports', async (req, res) => {
   });
 });
 
-// DELETE /api/reports: clears all reports
+// DELETE /api/reports/:id: deletes a single report (requires password '2026Mario')
+app.delete('/api/reports/:id', async (req, res) => {
+  const password = (req.headers['x-admin-key'] || req.body?.password || req.query?.password || '').toString().trim();
+  if (password !== '2026Mario') {
+    return res.status(403).json({ error: 'Clave incorrecta. Solo el personal con la clave "2026Mario" puede eliminar este reporte.' });
+  }
+
+  const reportId = req.params.id;
+  const existing = getBackupReports();
+  const filtered = existing.filter((r: any) => r.id !== reportId && r.id_local !== reportId);
+  saveBackupReports(filtered);
+
+  const supabase = getServerSupabaseClient();
+  let supabaseDeleted = false;
+  if (supabase) {
+    try {
+      const { error } = await supabase.from(SUPABASE_TABLE_NAME).delete().eq('id', reportId);
+      if (!error) supabaseDeleted = true;
+    } catch (e) {
+      console.error('Error al borrar reporte individual en Supabase:', e);
+    }
+  }
+
+  res.json({ success: true, reportId, supabaseDeleted });
+});
+
+// DELETE /api/reports: clears all reports (requires password '2026Mario')
 app.delete('/api/reports', async (req, res) => {
+  const password = (req.headers['x-admin-key'] || req.body?.password || req.query?.password || '').toString().trim();
+  if (password !== '2026Mario') {
+    return res.status(403).json({ error: 'Clave incorrecta. Solo el personal con la clave "2026Mario" puede eliminar reportes.' });
+  }
+
   saveBackupReports([]);
 
   const supabase = getServerSupabaseClient();
   let supabaseDeleted = false;
   if (supabase) {
     try {
-      await supabase.from(SUPABASE_TABLE_NAME).delete().gte('rubro_id', 0);
+      await supabase.from(SUPABASE_TABLE_NAME).delete().neq('id', '00000000-0000-0000-0000-000000000000');
       supabaseDeleted = true;
     } catch (e) {
       console.error('Error al borrar en Supabase:', e);

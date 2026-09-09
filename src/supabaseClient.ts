@@ -3,8 +3,9 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 // Define the name of the Supabase table we will use
 export const SUPABASE_TABLE_NAME = 'incidencias_distrito';
 
-// Default project URL if none is configured
+// Default project URL and Key so every device connects automatically
 export const DEFAULT_SUPABASE_URL = 'https://kcunaxyxanmokzvnhnsi.supabase.co';
+export const DEFAULT_SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtjdW5heHl4YW5tb2t6dm5obnNpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg4MDgxNDUsImV4cCI6MjEwNDM4NDE0NX0.WpavQ9W4btGgfhQwvbU_XDcWHrktyChKJijOQoAP5Rk';
 
 // Helper to get configuration
 export interface SupabaseConfigKeys {
@@ -12,7 +13,7 @@ export interface SupabaseConfigKeys {
   anonKey: string;
 }
 
-export async function initGlobalSupabaseConfig(): Promise<SupabaseConfigKeys | null> {
+export async function initGlobalSupabaseConfig(): Promise<SupabaseConfigKeys> {
   // 1. Check if configuration was passed in the URL
   const fromUrl = checkUrlConfig();
   if (fromUrl) {
@@ -50,7 +51,9 @@ export async function initGlobalSupabaseConfig(): Promise<SupabaseConfigKeys | n
     return { url: envUrl, anonKey: envKey };
   }
 
-  return null;
+  // 5. Guaranteed default connection
+  saveStoredSupabaseConfig(DEFAULT_SUPABASE_URL, DEFAULT_SUPABASE_ANON_KEY);
+  return { url: DEFAULT_SUPABASE_URL, anonKey: DEFAULT_SUPABASE_ANON_KEY };
 }
 
 function checkUrlConfig(): SupabaseConfigKeys | null {
@@ -99,7 +102,7 @@ function getLocalConfig(): SupabaseConfigKeys | null {
   return null;
 }
 
-export function getStoredSupabaseConfig(): SupabaseConfigKeys | null {
+export function getStoredSupabaseConfig(): SupabaseConfigKeys {
   const fromUrl = checkUrlConfig();
   if (fromUrl) return fromUrl;
 
@@ -112,7 +115,8 @@ export function getStoredSupabaseConfig(): SupabaseConfigKeys | null {
     return { url: envUrl, anonKey: envKey };
   }
 
-  return null;
+  // Fallback to default credentials
+  return { url: DEFAULT_SUPABASE_URL, anonKey: DEFAULT_SUPABASE_ANON_KEY };
 }
 
 export async function syncConfigToServer(url: string, anonKey: string) {

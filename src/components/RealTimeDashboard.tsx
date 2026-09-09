@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, FormEvent } from 'react';
 import { 
   BarChart, 
   Bar, 
@@ -22,20 +22,129 @@ import {
   Flame,
   Info,
   File,
-  Trash2
+  Trash2,
+  KeyRound,
+  Lock,
+  Eye,
+  ExternalLink,
+  Download,
+  X,
+  Maximize2
 } from 'lucide-react';
 import { IncidentReport } from '../types';
 import AudioReader from './AudioReader';
 
 interface RealTimeDashboardProps {
   reports: IncidentReport[];
-  onClearAllData?: () => void;
+  onClearAllData?: (password: string) => Promise<boolean>;
+  onDeleteSingleReport?: (report: IncidentReport, password: string) => Promise<{ success: boolean; error?: string }>;
 }
 
-export default function RealTimeDashboard({ reports, onClearAllData }: RealTimeDashboardProps) {
+export default function RealTimeDashboard({ reports, onClearAllData, onDeleteSingleReport }: RealTimeDashboardProps) {
   const [filterDistrict, setFilterDistrict] = useState<string>('Todos');
   const [filterRubro, setFilterRubro] = useState<string>('Todos');
-  const [filterTipo, setFilterTipo] = useState<string>('Todos'); // Todos, Con Incidencia, Sin Incidencia
+  const [filterTipo, setFilterTipo] = useState<string>('con_incidencia'); // Default: Solo con Incidencia
+
+  // Modal for previewing images / documents in full resolution
+  const [previewFile, setPreviewFile] = useState<{ url: string; name: string; isImage: boolean } | null>(null);
+
+  // Password-protected deletion states ("2026Mario")
+  const [deleteTarget, setDeleteTarget] = useState<{ type: 'single'; report: IncidentReport } | { type: 'all' } | null>(null);
+  const [deletePassword, setDeletePassword] = useState<string>('');
+  const [deleteError, setDeleteError] = useState<string>('');
+  const [isDeleting, setIsDeleting] = useState<boolean>(false);
+  const [deleteSuccessToast, setDeleteSuccessToast] = useState<string | null>(null);
+
+  const handleOpenDeleteSingle = (report: IncidentReport) => {
+    setDeleteTarget({ type: 'single', report });
+    setDeletePassword('');
+    setDeleteError('');
+  };
+
+  const handleOpenClearAll = () => {
+    setDeleteTarget({ type: 'all' });
+    setDeletePassword('');
+    setDeleteError('');
+  };
+
+  const handleOpenDirectLink = (fileData: string, fileName?: string) => {
+    try {
+      if (fileData.startsWith('data:')) {
+        const arr = fileData.split(',');
+        const mimeMatch = arr[0].match(/:(.*?);/);
+        const mime = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+        const bstr = atob(arr[1]);
+        let n = bstr.length;
+        const u8arr = new Uint8Array(n);
+        while (n--) {
+          u8arr[n] = bstr.charCodeAt(n);
+        }
+        const blob = new Blob([u8arr], { type: mime });
+        const blobUrl = URL.createObjectURL(blob);
+        const win = window.open(blobUrl, '_blank');
+        if (!win) {
+          const a = document.createElement('a');
+          a.href = blobUrl;
+          a.target = '_blank';
+          a.rel = 'noopener noreferrer';
+          a.click();
+        }
+      } else {
+        window.open(fileData, '_blank');
+      }
+    } catch (e) {
+      console.error('Error opening link:', e);
+      const a = document.createElement('a');
+      a.href = fileData;
+      a.download = fileName || 'evidencia';
+      a.click();
+    }
+  };
+
+  const handleConfirmDelete = async (e: FormEvent) => {
+    e.preventDefault();
+    const entered = deletePassword.trim();
+    if (entered !== '2026Mario') {
+      setDeleteError('Clave incorrecta. No tiene autorización para realizar esta acción.');
+      return;
+    }
+
+    setIsDeleting(true);
+    setDeleteError('');
+
+    try {
+      if (deleteTarget?.type === 'single') {
+        if (onDeleteSingleReport) {
+          const res = await onDeleteSingleReport(deleteTarget.report, entered);
+          if (!res.success) {
+            setDeleteError(res.error || 'Error al eliminar el reporte.');
+            setIsDeleting(false);
+            return;
+          }
+        }
+        setDeleteSuccessToast(`Informe de "${deleteTarget.report.distrito}" (Rubro ${deleteTarget.report.rubro_id}) eliminado con éxito.`);
+      } else if (deleteTarget?.type === 'all') {
+        if (onClearAllData) {
+          const success = await onClearAllData(entered);
+          if (!success) {
+            setDeleteError('Error al eliminar los reportes.');
+            setIsDeleting(false);
+            return;
+          }
+        }
+        setDeleteSuccessToast('Todos los reportes han sido eliminados de la base de datos.');
+      }
+
+      setDeleteTarget(null);
+      setDeletePassword('');
+      setDeleteError('');
+      setTimeout(() => setDeleteSuccessToast(null), 4000);
+    } catch (err: any) {
+      setDeleteError(err?.message || 'Ocurrió un error al procesar la eliminación.');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
 
   const getCategoryIcon = (rubroId: number) => {
     switch (rubroId) {
@@ -151,68 +260,74 @@ export default function RealTimeDashboard({ reports, onClearAllData }: RealTimeD
     <div id="real-time-dashboard" className="space-y-8">
       
       {/* Top Welcome Title Card */}
-      <div className="bg-gradient-to-r from-blue-800 via-blue-900 to-indigo-950 border-4 border-blue-900 border-b-red-600 rounded-3xl p-6 text-white shadow-xl space-y-4">
-        <div className="flex flex-col md:flex-row items-center justify-between gap-4">
-          <div className="space-y-2 text-center md:text-left">
-            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-100 text-blue-950 font-black text-xs">
-              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping"></span>
-              SISTEMA MACE EN TIEMPO REAL • CONECTADO A SUPABASE
-            </div>
-            <h2 className="text-3xl md:text-4xl font-black tracking-tight">
-              📊 Tablero de Control de Coyuntura ODPE
+      <div className="bg-gradient-to-r from-blue-800 via-blue-900 to-indigo-950 border-4 border-blue-900 border-b-red-600 rounded-3xl p-5 text-white shadow-xl space-y-4">
+        <div className="flex flex-row items-center justify-between gap-3">
+          <div className="space-y-1">
+            <h2 className="text-2xl sm:text-3xl font-black tracking-tight flex items-center gap-2">
+              <span>📊 Tablero de Control de Coyuntura ODPE</span>
             </h2>
-            <p className="text-lg text-blue-100 font-bold max-w-2xl leading-relaxed">
-              Monitoreo permanente de los 9 rubros críticos de seguridad, acceso, desinformación y actividades electorales para toma de decisiones rápidas.
-            </p>
           </div>
 
-          <div className="flex flex-wrap sm:flex-nowrap items-center gap-3">
+          <div className="flex items-center gap-2">
             {onClearAllData && reports.length > 0 && (
               <button
                 type="button"
                 id="btn-clear-test-data-top"
-                onClick={onClearAllData}
-                className="px-4 py-3 bg-rose-600 hover:bg-rose-700 active:scale-95 text-white font-black text-xs sm:text-sm rounded-2xl shadow-lg border-2 border-rose-400 flex items-center gap-1.5 transition-all cursor-pointer"
-                title="Eliminar todos los reportes de prueba y dejar la base de datos limpia"
+                onClick={handleOpenClearAll}
+                className="p-2 bg-rose-600/90 hover:bg-rose-600 active:scale-90 text-white rounded-xl shadow border border-rose-400/80 flex items-center justify-center transition-all cursor-pointer shrink-0"
+                title={`Eliminar todos los reportes (${reports.length})`}
+                aria-label="Eliminar todos los reportes"
               >
                 <Trash2 className="w-4 h-4" />
-                <span>Borrar Datos de Prueba ({reports.length})</span>
               </button>
             )}
 
-            <div className="shrink-0 bg-white p-3 rounded-2xl flex items-center justify-center shadow-lg border-2 border-blue-200">
+            <div className="shrink-0 bg-white p-1.5 rounded-xl flex items-center justify-center shadow-md border border-blue-200">
               <AudioReader text={dashboardSpeechText} />
             </div>
           </div>
         </div>
 
-        {/* 4 Large Highlight Metric Widgets */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 pt-2">
+        {/* Compact Highlight Metric Widgets */}
+        <div className="grid grid-cols-3 gap-2.5 pt-1">
           
-          <div className="bg-white/10 backdrop-blur rounded-2xl p-4 border border-white/20 text-center space-y-1">
-            <span className="text-sm font-black tracking-widest text-blue-100 uppercase block">Total Evaluaciones</span>
-            <span className="text-4xl font-black block text-yellow-300">{reports.length}</span>
-            <span className="text-xs font-bold text-blue-100 block">Registros totales en base de datos</span>
-          </div>
-
-          <div className="bg-white/10 backdrop-blur rounded-2xl p-4 border border-white/20 text-center space-y-1">
-            <span className="text-sm font-black tracking-widest text-blue-100 uppercase block">🚨 Con Incidencias</span>
-            <span className="text-4xl font-black block text-rose-300">{incidentCount}</span>
-            <span className="text-xs font-bold text-blue-100 block">Problemas que requieren atención</span>
-          </div>
-
-          <div className="bg-white/10 backdrop-blur rounded-2xl p-4 border border-white/20 text-center space-y-1">
-            <span className="text-sm font-black tracking-widest text-blue-100 uppercase block">✅ Sin Novedad</span>
-            <span className="text-4xl font-black block text-emerald-300">{cleanCount}</span>
-            <span className="text-xs font-bold text-blue-100 block">Situaciones normales reportadas</span>
-          </div>
-
-          <div className="bg-white/10 backdrop-blur rounded-2xl p-4 border border-white/20 text-center space-y-1">
-            <span className="text-sm font-black tracking-widest text-blue-100 uppercase block">ODPE Activas</span>
-            <span className="text-4xl font-black block text-amber-300">
-              {new Set(reports.map(r => r.odpe)).size}
+          {/* 1. Distritos Activos */}
+          <div className="bg-white/10 backdrop-blur rounded-xl p-2.5 sm:p-3 border border-white/20 text-center space-y-0.5">
+            <span className="text-[10px] sm:text-xs font-black tracking-wider text-blue-200 uppercase block truncate">
+              Distritos Activos
             </span>
-            <span className="text-xs font-bold text-blue-100 block">Oficinas que han reportado</span>
+            <span className="text-xl sm:text-2xl md:text-3xl font-black block text-amber-300">
+              {new Set(reports.map(r => r.distrito)).size}
+            </span>
+            <span className="text-[9px] sm:text-[10px] font-bold text-blue-100 hidden sm:block">
+              Con reportes recibidos
+            </span>
+          </div>
+
+          {/* 2. Con Incidencias */}
+          <div className="bg-white/10 backdrop-blur rounded-xl p-2.5 sm:p-3 border border-white/20 text-center space-y-0.5">
+            <span className="text-[10px] sm:text-xs font-black tracking-wider text-rose-200 uppercase block truncate">
+              🚨 Con Incidencias
+            </span>
+            <span className="text-xl sm:text-2xl md:text-3xl font-black block text-rose-300">
+              {incidentCount}
+            </span>
+            <span className="text-[9px] sm:text-[10px] font-bold text-rose-100 hidden sm:block">
+              Requieren atención
+            </span>
+          </div>
+
+          {/* 3. Sin Novedad */}
+          <div className="bg-white/10 backdrop-blur rounded-xl p-2.5 sm:p-3 border border-white/20 text-center space-y-0.5">
+            <span className="text-[10px] sm:text-xs font-black tracking-wider text-emerald-200 uppercase block truncate">
+              ✅ Sin Novedad
+            </span>
+            <span className="text-xl sm:text-2xl md:text-3xl font-black block text-emerald-300">
+              {cleanCount}
+            </span>
+            <span className="text-[9px] sm:text-[10px] font-bold text-emerald-100 hidden sm:block">
+              Situación normal
+            </span>
           </div>
 
         </div>
@@ -360,8 +475,8 @@ export default function RealTimeDashboard({ reports, onClearAllData }: RealTimeD
               onChange={(e) => setFilterTipo(e.target.value)}
               className="py-2.5 px-3 border-2 border-slate-200 rounded-xl font-bold text-sm text-slate-850 bg-slate-50 focus:border-blue-600 focus:outline-none"
             >
+              <option value="con_incidencia">🚨 Solo Con Incidencia (Por defecto)</option>
               <option value="Todos">⚖️ Todos los Estados</option>
-              <option value="con_incidencia">🚨 Solo Con Incidencia</option>
               <option value="sin_incidencia">✅ Solo Sin Novedad (Clean)</option>
             </select>
           </div>
@@ -397,8 +512,8 @@ export default function RealTimeDashboard({ reports, onClearAllData }: RealTimeD
                     </div>
                   </div>
 
-                  {/* Status Tag */}
-                  <div>
+                  {/* Status Tag and Actions */}
+                  <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap justify-end">
                     {r.tiene_problema ? (
                       <span className="px-3 py-1.5 rounded-full bg-rose-500 text-white font-black text-xs flex items-center gap-1 shadow-sm">
                         <AlertOctagon className="w-3.5 h-3.5" />
@@ -410,6 +525,17 @@ export default function RealTimeDashboard({ reports, onClearAllData }: RealTimeD
                         SIN INCIDENCIA / NORMAL
                       </span>
                     )}
+
+                    <button
+                      type="button"
+                      id={`btn-delete-report-${r.id || r.id_local || index}`}
+                      onClick={() => handleOpenDeleteSingle(r)}
+                      className="px-2.5 py-1.5 rounded-xl text-xs font-black text-rose-700 hover:text-white hover:bg-rose-600 bg-rose-50 border border-rose-200 transition-all flex items-center gap-1 shrink-0 active:scale-95 cursor-pointer shadow-2xs"
+                      title="Eliminar este reporte (requiere clave autorizada 2026Mario)"
+                    >
+                      <Trash2 className="w-3.5 h-3.5 text-rose-500 hover:text-white" />
+                      <span className="hidden sm:inline">Eliminar</span>
+                    </button>
                   </div>
                 </div>
 
@@ -504,32 +630,75 @@ export default function RealTimeDashboard({ reports, onClearAllData }: RealTimeD
                               {evidenceText && <p className="text-slate-700 font-extrabold text-sm">{evidenceText}</p>}
                               
                               {fileData && (
-                                <div className="mt-2.5 p-3 rounded-2xl border-2 border-blue-100 bg-blue-50/20 flex items-center justify-between gap-3 max-w-sm shadow-sm">
-                                  <div className="flex items-center gap-2.5 overflow-hidden">
+                                <div className="mt-2.5 p-3 rounded-2xl border-2 border-blue-200 bg-blue-50/40 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 max-w-md shadow-xs">
+                                  <div className="flex items-center gap-3 overflow-hidden">
                                     {fileData.startsWith('data:image/') ? (
-                                      <a href={fileData} target="_blank" rel="noopener noreferrer" className="block shrink-0">
+                                      <button 
+                                        type="button"
+                                        onClick={() => setPreviewFile({ url: fileData, name: fileName || 'Foto de evidencia', isImage: true })}
+                                        className="relative group block shrink-0 cursor-pointer overflow-hidden rounded-xl border-2 border-blue-300 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                        title="Haga clic para ver la foto en tamaño completo"
+                                      >
                                         <img 
                                           src={fileData} 
                                           alt="Evidencia adjunta" 
-                                          className="w-11 h-11 rounded-lg object-cover border border-slate-200 cursor-zoom-in hover:opacity-90 shadow-sm"
+                                          className="w-14 h-14 object-cover group-hover:scale-110 transition-transform duration-200"
                                           referrerPolicy="no-referrer"
                                         />
-                                      </a>
+                                        <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white">
+                                          <Eye className="w-5 h-5" />
+                                        </div>
+                                      </button>
                                     ) : (
-                                      <div className="bg-blue-100 p-2 rounded-lg text-blue-600 shrink-0">
-                                        <File className="w-5 h-5" />
+                                      <div className="bg-blue-100 p-3 rounded-xl text-blue-700 shrink-0 shadow-inner">
+                                        <File className="w-6 h-6" />
                                       </div>
                                     )}
+                                    
                                     <div className="text-left overflow-hidden">
-                                      <span className="text-[10px] text-slate-400 font-bold block uppercase tracking-wider">Archivo Adjunto</span>
-                                      <a 
-                                        href={fileData} 
-                                        download={fileName || 'evidencia'} 
-                                        className="text-xs font-black text-blue-800 hover:underline truncate block max-w-[180px]"
-                                      >
-                                        {fileName || 'Descargar archivo'}
-                                      </a>
+                                      <span className="text-[10px] text-blue-900 font-extrabold uppercase tracking-wider block">
+                                        {fileData.startsWith('data:image/') ? '📷 Fotografía / Imagen' : '📄 Documento Adjunto'}
+                                      </span>
+                                      <span className="text-xs font-black text-slate-900 truncate block max-w-[180px]">
+                                        {fileName || 'Archivo de evidencia'}
+                                      </span>
+                                      <span className="text-[10px] text-slate-500 font-semibold block">
+                                        Toque la foto o los botones para verla
+                                      </span>
                                     </div>
+                                  </div>
+
+                                  <div className="flex items-center gap-1.5 w-full sm:w-auto justify-end shrink-0 pt-1 sm:pt-0 border-t sm:border-t-0 border-blue-100">
+                                    {fileData.startsWith('data:image/') ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => setPreviewFile({ url: fileData, name: fileName || 'Foto de evidencia', isImage: true })}
+                                        className="px-2.5 py-1.5 bg-blue-800 hover:bg-blue-900 active:scale-95 text-white font-bold text-xs rounded-lg shadow-xs flex items-center gap-1 cursor-pointer transition-all"
+                                        title="Ver en pantalla completa"
+                                      >
+                                        <Maximize2 className="w-3.5 h-3.5" />
+                                        <span>Ver</span>
+                                      </button>
+                                    ) : null}
+
+                                    <button
+                                      type="button"
+                                      onClick={() => handleOpenDirectLink(fileData, fileName)}
+                                      className="px-2.5 py-1.5 bg-white border border-slate-300 hover:bg-slate-100 active:scale-95 text-slate-800 font-bold text-xs rounded-lg shadow-xs flex items-center gap-1 cursor-pointer transition-all"
+                                      title="Abrir en enlace directo"
+                                    >
+                                      <ExternalLink className="w-3.5 h-3.5 text-blue-600" />
+                                      <span>Abrir</span>
+                                    </button>
+
+                                    <a 
+                                      href={fileData} 
+                                      download={fileName || 'evidencia'} 
+                                      className="p-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition-colors"
+                                      title="Descargar archivo original"
+                                    >
+                                      <Download className="w-3.5 h-3.5" />
+                                    </a>
                                   </div>
                                 </div>
                               )}
@@ -568,13 +737,259 @@ export default function RealTimeDashboard({ reports, onClearAllData }: RealTimeD
               </div>
             ))}
           </div>
+        ) : reports.length === 0 ? (
+          <div className="p-12 text-center bg-gradient-to-b from-blue-50/60 to-slate-50 border-4 border-dashed border-blue-200 rounded-3xl space-y-4">
+            <div className="w-16 h-16 bg-blue-100 text-blue-700 rounded-full flex items-center justify-center mx-auto shadow-inner">
+              <CheckCircle2 className="w-8 h-8 text-blue-600" />
+            </div>
+            <div className="space-y-1">
+              <h4 className="text-xl font-black text-slate-900">
+                🟢 Base de Datos Limpia y Lista para Operar
+              </h4>
+              <p className="text-sm font-bold text-slate-600 max-w-lg mx-auto">
+                No hay registros de prueba. Cada nuevo informe enviado desde el cuestionario de 9 rubros se guardará de forma inmediata en Supabase y aparecerá aquí en tiempo real.
+              </p>
+            </div>
+          </div>
+        ) : filterTipo === 'con_incidencia' && incidentCount === 0 ? (
+          <div className="p-10 text-center bg-emerald-50 border-4 border-dashed border-emerald-200 rounded-3xl space-y-3">
+            <div className="w-14 h-14 bg-emerald-100 text-emerald-700 rounded-full flex items-center justify-center mx-auto shadow-xs">
+              <CheckCircle2 className="w-8 h-8 text-emerald-600" />
+            </div>
+            <h4 className="text-lg font-black text-emerald-950">
+              ¡Excelente! No hay incidencias críticas reportadas
+            </h4>
+            <p className="text-sm font-medium text-emerald-800 max-w-md mx-auto">
+              Todas las evaluaciones registradas se encuentran en situación normal ("Sin Novedad").
+            </p>
+            <button
+              type="button"
+              onClick={() => setFilterTipo('Todos')}
+              className="mt-2 px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs rounded-xl shadow-xs transition-all cursor-pointer"
+            >
+              Ver las {reports.length} Evaluaciones Normales
+            </button>
+          </div>
         ) : (
-          <div className="p-10 text-center bg-slate-50 border-4 border-dashed border-slate-200 rounded-3xl text-slate-400 font-black text-lg">
-            No se encontraron reportes con los criterios de filtración seleccionados. ¡Intente cambiando los filtros de arriba!
+          <div className="p-10 text-center bg-slate-50 border-4 border-dashed border-slate-200 rounded-3xl space-y-3">
+            <p className="text-slate-600 font-bold text-base">
+              No se encontraron reportes con los criterios de filtración seleccionados.
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                setFilterDistrict('Todos');
+                setFilterRubro('Todos');
+                setFilterTipo('Todos');
+              }}
+              className="px-4 py-2 bg-blue-800 hover:bg-blue-900 text-white font-bold text-xs rounded-xl shadow-xs transition-all cursor-pointer"
+            >
+              Restablecer todos los filtros
+            </button>
           </div>
         )}
 
       </div>
+
+      {/* Security Password Deletion Modal ("2026Mario") */}
+      {deleteTarget && (
+        <div className="fixed inset-0 bg-slate-950/75 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl p-6 sm:p-8 max-w-md w-full shadow-2xl border-2 border-slate-200 relative space-y-5 animate-in fade-in zoom-in-95 duration-150 text-left">
+            <button
+              type="button"
+              onClick={() => {
+                setDeleteTarget(null);
+                setDeletePassword('');
+                setDeleteError('');
+              }}
+              className="absolute top-4 right-4 p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-500 hover:text-slate-800 transition-colors"
+            >
+              ✕
+            </button>
+
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center text-2xl shrink-0 shadow-inner">
+                <KeyRound className="w-6 h-6 text-rose-600" />
+              </div>
+              <div>
+                <h3 className="text-xl font-black text-slate-900 leading-tight">
+                  Clave de Seguridad Requerida
+                </h3>
+                <span className="text-xs font-bold text-rose-600 uppercase tracking-wider flex items-center gap-1">
+                  <Lock className="w-3 h-3" />
+                  Acción Protegida • Eliminación
+                </span>
+              </div>
+            </div>
+
+            <div className="p-4 bg-rose-50/90 border border-rose-200 rounded-2xl text-xs sm:text-sm font-medium text-slate-800 space-y-1.5">
+              <p className="font-extrabold text-rose-950">
+                {deleteTarget.type === 'single'
+                  ? `¿Desea eliminar el reporte de "${deleteTarget.report.distrito}" (Rubro ${deleteTarget.report.rubro_id}: ${deleteTarget.report.categoria}) registrado por ${deleteTarget.report.nombre_informante}?`
+                  : `¿Desea eliminar todos los ${reports.length} reportes registrados en la base de datos?`}
+              </p>
+              <p className="text-slate-600 text-xs">
+                Esta acción es irreversible y requiere autorización administrativa.
+              </p>
+            </div>
+
+            <form onSubmit={handleConfirmDelete} className="space-y-4">
+              <div className="space-y-1.5 text-left">
+                <label className="text-xs font-black text-slate-600 uppercase tracking-wider block">
+                  Ingrese Clave de Autorización:
+                </label>
+                <input
+                  type="password"
+                  autoFocus
+                  required
+                  placeholder="••••••••"
+                  value={deletePassword}
+                  onChange={(e) => {
+                    setDeletePassword(e.target.value);
+                    setDeleteError('');
+                  }}
+                  className="w-full px-4 py-3 bg-slate-50 border-2 border-slate-300 focus:border-rose-600 rounded-xl font-bold text-slate-900 text-center tracking-wider text-base focus:outline-none transition-all placeholder-slate-400"
+                />
+                {deleteError && (
+                  <p className="text-xs font-black text-rose-600 bg-rose-50 border border-rose-200 p-2.5 rounded-xl text-center animate-bounce">
+                    ⚠️ {deleteError}
+                  </p>
+                )}
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDeleteTarget(null);
+                    setDeletePassword('');
+                    setDeleteError('');
+                  }}
+                  className="flex-1 py-3 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-sm rounded-xl transition-all cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={isDeleting}
+                  className="flex-1 py-3 px-4 bg-rose-600 hover:bg-rose-700 active:scale-95 text-white font-black text-sm rounded-xl shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span>{isDeleting ? 'Verificando...' : 'Eliminar'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Full-Screen Image / Document Lightbox Modal */}
+      {previewFile && (
+        <div 
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 animate-fadeIn"
+          onClick={() => setPreviewFile(null)}
+        >
+          <div 
+            className="bg-slate-900 border-2 border-slate-700 text-white rounded-3xl max-w-4xl w-full max-h-[92vh] flex flex-col shadow-2xl overflow-hidden animate-scaleUp"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="p-4 sm:p-5 border-b border-slate-800 flex items-center justify-between gap-3 bg-slate-950/60">
+              <div className="flex items-center gap-2.5 overflow-hidden">
+                <span className="text-xl">📷</span>
+                <div className="overflow-hidden">
+                  <h3 className="font-black text-sm sm:text-base text-white truncate">
+                    {previewFile.name}
+                  </h3>
+                  <span className="text-[11px] text-slate-400 font-bold block">
+                    Visor de Evidencia en Alta Resolución
+                  </span>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleOpenDirectLink(previewFile.url, previewFile.name)}
+                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl flex items-center gap-1.5 transition-all shadow cursor-pointer active:scale-95"
+                  title="Abrir imagen en pestaña nueva del navegador"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Enlace Directo</span>
+                </button>
+
+                <a
+                  href={previewFile.url}
+                  download={previewFile.name}
+                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold rounded-xl flex items-center gap-1.5 transition-all shadow cursor-pointer"
+                  title="Descargar archivo original"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Descargar</span>
+                </a>
+
+                <button
+                  type="button"
+                  onClick={() => setPreviewFile(null)}
+                  className="p-2 bg-slate-800 hover:bg-rose-600 text-slate-400 hover:text-white rounded-xl transition-all cursor-pointer"
+                  title="Cerrar visor"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Modal Body - Image / Doc display */}
+            <div className="flex-1 p-3 sm:p-6 overflow-auto flex items-center justify-center bg-black/40 min-h-[300px] max-h-[68vh]">
+              {previewFile.isImage ? (
+                <img 
+                  src={previewFile.url} 
+                  alt={previewFile.name}
+                  className="max-w-full max-h-full object-contain rounded-xl shadow-2xl border border-slate-700"
+                  referrerPolicy="no-referrer"
+                />
+              ) : (
+                <div className="text-center p-8 space-y-4">
+                  <File className="w-20 h-20 text-blue-400 mx-auto animate-bounce" />
+                  <div>
+                    <h4 className="font-black text-lg text-white">{previewFile.name}</h4>
+                    <p className="text-sm text-slate-400 font-medium">Documento adjunto listo para abrir o descargar</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleOpenDirectLink(previewFile.url, previewFile.name)}
+                    className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-black text-sm rounded-xl shadow-lg transition-all"
+                  >
+                    Abrir Documento Directamente
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-3 bg-slate-950/80 border-t border-slate-800 flex items-center justify-between text-xs text-slate-400">
+              <span className="font-semibold">
+                ℹ️ Si desea ver la imagen a su 100% de tamaño o imprimirla, use el botón "Enlace Directo".
+              </span>
+              <button
+                type="button"
+                onClick={() => setPreviewFile(null)}
+                className="px-4 py-1.5 bg-slate-800 hover:bg-slate-700 text-white font-bold rounded-lg cursor-pointer transition-colors"
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Success Notification Toast */}
+      {deleteSuccessToast && (
+        <div className="fixed bottom-6 right-6 z-50 bg-emerald-800 text-white px-5 py-3.5 rounded-2xl shadow-2xl flex items-center gap-3 border-2 border-emerald-400 animate-in slide-in-from-bottom-5">
+          <CheckCircle2 className="w-5 h-5 text-emerald-300 shrink-0" />
+          <span className="font-extrabold text-sm">{deleteSuccessToast}</span>
+        </div>
+      )}
 
     </div>
   );

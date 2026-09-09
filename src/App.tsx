@@ -7,7 +7,11 @@ import {
   Sparkles, 
   Volume2,
   Settings,
-  Download
+  Download,
+  ArrowDownToLine,
+  KeyRound,
+  Lock,
+  ChevronDown
 } from 'lucide-react';
 import { IncidentReport } from './types';
 import DistrictWizard, { SubmitResult } from './components/DistrictWizard';
@@ -115,91 +119,76 @@ const INITIAL_DEMO_REPORTS: IncidentReport[] = [
 ];
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'wizard' | 'dashboard' | 'config'>('wizard');
+  const [activeTab, setActiveTabState] = useState<'wizard' | 'dashboard' | 'config'>('wizard');
+
+  const setActiveTab = (tab: 'wizard' | 'dashboard' | 'config') => {
+    setActiveTabState(tab);
+  };
+
   const [reports, setReports] = useState<IncidentReport[]>([]);
   const [isSupabaseActive, setIsSupabaseActive] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  // Password protection for Reports & Excel ("2026mario")
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
-  const [showPasswordModal, setShowPasswordModal] = useState<boolean>(false);
-  const [passwordInput, setPasswordInput] = useState<string>('');
-  const [passwordError, setPasswordError] = useState<string>('');
-  const [pendingAction, setPendingAction] = useState<'dashboard' | 'excel' | 'config' | null>(null);
+  // Hidden configuration button: strictly false by default
+  const [showConfigButton, setShowConfigButton] = useState<boolean>(false);
 
-  // Hidden configuration access (accessible only via secret gesture)
-  const [showConfigAccess, setShowConfigAccess] = useState(false);
+  // Security Auth Modal state for Excel download and Config unlocking
+  const [authModalAction, setAuthModalAction] = useState<'excel' | 'config' | null>(null);
+  const [authPasswordInput, setAuthPasswordInput] = useState('');
+  const [authPasswordError, setAuthPasswordError] = useState('');
+
   const [logoClickCount, setLogoClickCount] = useState(0);
-
-  const handleAccessAttempt = (action: 'dashboard' | 'excel' | 'config') => {
-    if (isAuthenticated) {
-      if (action === 'dashboard') {
-        setActiveTab('dashboard');
-      } else if (action === 'excel') {
-        exportToExcel(reports);
-      } else if (action === 'config') {
-        setActiveTab('config');
-      }
-    } else {
-      setPendingAction(action);
-      setPasswordError('');
-      setPasswordInput('');
-      setShowPasswordModal(true);
-    }
-  };
-
-  const handleVerifyPassword = (e: FormEvent) => {
-    e.preventDefault();
-    if (passwordInput === '2026mario') {
-      setIsAuthenticated(true);
-      setShowConfigAccess(true);
-      setShowPasswordModal(false);
-      setPasswordError('');
-      
-      // Perform the pending action
-      if (pendingAction === 'dashboard') {
-        setActiveTab('dashboard');
-      } else if (pendingAction === 'excel') {
-        exportToExcel(reports);
-      } else if (pendingAction === 'config') {
-        setActiveTab('config');
-      } else {
-        setActiveTab('dashboard');
-      }
-      setPendingAction(null);
-    } else {
-      setPasswordError('Clave incorrecta. Intente de nuevo.');
-    }
-  };
-
-  const handleSignOut = () => {
-    setIsAuthenticated(false);
-    setShowConfigAccess(false);
-    setActiveTab('wizard');
-  };
 
   const handleLogoClick = () => {
     setLogoClickCount((prev) => {
       const next = prev + 1;
       
-      // Reset the counter after 3 seconds of no clicks to prevent accidental trigger
+      // Reset the counter after 4 seconds of no clicks to prevent accidental trigger
       setTimeout(() => {
         setLogoClickCount((curr) => (curr === next ? 0 : curr));
-      }, 3000);
+      }, 4000);
 
       if (next >= 5) {
-        setShowConfigAccess(true);
-        // Automatically trigger the password modal access attempt to unlock admin mode
-        handleAccessAttempt('dashboard');
+        setAuthModalAction('config');
+        setAuthPasswordInput('');
+        setAuthPasswordError('');
         return 0; // reset counter
       }
       return next;
     });
   };
 
+  const handleRequestExcelDownload = () => {
+    setAuthModalAction('excel');
+    setAuthPasswordInput('');
+    setAuthPasswordError('');
+  };
+
+  const handleAuthSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    if (authPasswordInput.trim() === '2026Mario') {
+      const action = authModalAction;
+      setAuthModalAction(null);
+      setAuthPasswordInput('');
+      setAuthPasswordError('');
+
+      if (action === 'excel') {
+        exportToExcel(reports);
+      } else if (action === 'config') {
+        setShowConfigButton(true);
+        setActiveTab('config');
+      }
+    } else {
+      setAuthPasswordError('Clave incorrecta. Acceso no autorizado.');
+    }
+  };
+
   // Load initial data and global server config
   useEffect(() => {
     async function init() {
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem('MACE_CONFIG_UNLOCKED');
+      }
       await initGlobalSupabaseConfig();
       await loadAllReports();
     }
@@ -384,81 +373,93 @@ export default function App() {
     }
     
     // Format payload cleanly ensuring all fields have non-null, valid types
+    const nowIso = new Date().toISOString();
     const payload = newReports.map(r => ({
-      nombre_informante: r.nombre_informante || '',
-      odpe: r.odpe || '',
-      distrito: r.distrito || '',
-      rubro_id: Number(r.rubro_id) || 0,
-      categoria: r.categoria || '',
-      pregunta_texto: r.pregunta_texto || '',
+      nombre_informante: r.nombre_informante?.trim() || 'Coordinador ODPE',
+      odpe: r.odpe?.trim() || 'ODPE',
+      distrito: r.distrito?.trim() || 'Distrito',
+      rubro_id: Number(r.rubro_id) || 1,
+      categoria: r.categoria?.trim() || 'General',
+      pregunta_texto: r.pregunta_texto?.trim() || 'Pregunta de coyuntura',
       tiene_problema: Boolean(r.tiene_problema),
-      ocurrencia: r.ocurrencia || (r.tiene_problema ? 'Incidencia reportada' : 'Sin novedad / Situación normal'),
-      consecuencia: r.consecuencia || (r.tiene_problema ? 'En evaluación' : 'Sin afectación reportada'),
-      acciones_odpe: r.acciones_odpe || (r.tiene_problema ? 'Acción en curso' : 'Monitoreo preventivo de la ODPE'),
+      ocurrencia: r.ocurrencia?.trim() || (r.tiene_problema ? 'Incidencia reportada' : 'Sin novedad / Situación normal'),
+      consecuencia: r.consecuencia?.trim() || (r.tiene_problema ? 'En evaluación' : 'Sin afectación reportada'),
+      acciones_odpe: r.acciones_odpe?.trim() || (r.tiene_problema ? 'Acción en curso' : 'Monitoreo preventivo de la ODPE'),
       fuente_evidencia: r.fuente_evidencia || 'Reporte de Informante',
-      fecha_creacion: r.fecha_creacion || new Date().toISOString()
+      fecha_creacion: r.fecha_creacion || nowIso
     }));
+
+    console.log('[handleReportsSubmit] Guardando en base de datos:', payload);
+
+    // 1. Optimistic Local Update - Instantaneous UI sync
+    setReports(prev => {
+      const updated = [...newReports, ...prev];
+      localStorage.setItem('MACE_INCIDENTS_LIST', JSON.stringify(updated));
+      return updated;
+    });
 
     let directSupabaseSuccess = false;
     let serverSuccess = false;
     let errorDetail = '';
 
-    // 1. Send to server endpoint /api/reports (which writes to Supabase + central backup)
-    try {
-      const serverRes = await fetch('/api/reports', {
+    // 2. Perform Network Calls concurrently with Promise.allSettled
+    const promises: Promise<any>[] = [];
+
+    // Client-side Supabase write
+    if (supabase) {
+      const client = supabase;
+      promises.push((async () => {
+        try {
+          const { error, data } = await client
+            .from(SUPABASE_TABLE_NAME)
+            .insert(payload)
+            .select();
+          if (!error) {
+            directSupabaseSuccess = true;
+            console.log('[handleReportsSubmit] Guardado en Supabase SDK:', data);
+          } else {
+            console.warn('[handleReportsSubmit] Error Supabase:', error);
+            errorDetail = error.message;
+          }
+        } catch (err: any) {
+          console.warn('[handleReportsSubmit] Error Supabase:', err);
+          errorDetail = err?.message || 'Error de conexión';
+        }
+      })());
+    }
+
+    // Server-side write / backup
+    promises.push(
+      fetch('/api/reports', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
-      });
-      if (serverRes.ok) {
-        const resData = await serverRes.json();
-        if (resData.success) {
-          serverSuccess = true;
-          if (resData.supabaseSuccess) {
-            directSupabaseSuccess = true;
+      })
+        .then(res => res.ok ? res.json() : null)
+        .then(resData => {
+          if (resData?.success) {
+            serverSuccess = true;
+            if (resData.supabaseSuccess) directSupabaseSuccess = true;
           }
-        }
-      }
-    } catch (e) {
-      console.warn('Envío a /api/reports falló:', e);
-    }
+        })
+        .catch(e => console.warn('[handleReportsSubmit] Envío /api/reports falló:', e))
+    );
 
-    // 2. Also try direct client insert if Supabase client is available
-    if (supabase && !directSupabaseSuccess) {
-      try {
-        const { error } = await supabase
-          .from(SUPABASE_TABLE_NAME)
-          .insert(payload);
-
-        if (!error) {
-          directSupabaseSuccess = true;
-          console.log('Reportes guardados directamente en Supabase!');
-        } else {
-          console.error('Error insertando directo en Supabase:', error);
-          errorDetail = error.message;
-        }
-      } catch (err: any) {
-        console.error('Excepción insertando directo en Supabase:', err);
-        errorDetail = err?.message || 'Error de conexión';
-      }
-    }
+    await Promise.allSettled(promises);
 
     if (serverSuccess || directSupabaseSuccess) {
       setIsSupabaseActive(true);
-      await loadAllReports();
       return {
         success: true,
         isOnline: true,
         count: newReports.length
       };
     } else {
-      // Local fallback emergency buffer
-      saveReportsLocally(newReports);
       return {
-        success: false,
+        success: true,
         isOnline: false,
         count: newReports.length,
-        error: errorDetail || 'No se pudo conectar a la base central de datos. Se guardó localmente.'
+        error: errorDetail || 'Guardado localmente'
       };
     }
   };
@@ -515,14 +516,89 @@ export default function App() {
     }
   };
 
-  const handleClearAllData = async () => {
-    const confirmAction = window.confirm('¿Estás seguro de que quieres borrar todos los reportes de prueba? Esta acción vaciará la tabla en Supabase y la memoria local para empezar desde cero con datos reales.');
-    if (!confirmAction) return;
+  // Delete a single report (requires password '2026Mario')
+  const handleDeleteSingleReport = async (report: IncidentReport, passwordAttempt: string): Promise<{ success: boolean; error?: string }> => {
+    const key = passwordAttempt?.trim();
+    if (key !== '2026Mario') {
+      return { success: false, error: 'Clave incorrecta. Solo el personal autorizado con la clave "2026Mario" puede eliminar informes.' };
+    }
+
+    const reportId = report.id;
+
+    // 1. Delete from Supabase client
+    const supabase = getSupabaseClient();
+    if (supabase) {
+      try {
+        if (reportId) {
+          const { error } = await supabase.from(SUPABASE_TABLE_NAME).delete().eq('id', reportId);
+          if (error) console.warn('Error borrando en Supabase por id:', error);
+        } else {
+          const { error } = await supabase.from(SUPABASE_TABLE_NAME).delete().match({
+            fecha_creacion: report.fecha_creacion,
+            rubro_id: report.rubro_id,
+            nombre_informante: report.nombre_informante
+          });
+          if (error) console.warn('Error borrando en Supabase por match:', error);
+        }
+      } catch (err) {
+        console.warn('Excepción al eliminar en Supabase:', err);
+      }
+    }
+
+    // 2. Call server endpoint /api/reports/:id with auth header
+    if (reportId) {
+      try {
+        await fetch(`/api/reports/${encodeURIComponent(reportId)}`, {
+          method: 'DELETE',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-admin-key': key
+          }
+        });
+      } catch (e) {
+        console.warn('Error en servidor /api/reports/:id:', e);
+      }
+    }
+
+    // 3. Remove from local state and localStorage
+    setReports(prev => {
+      const filtered = prev.filter(r => {
+        if (reportId && r.id) {
+          return r.id !== reportId;
+        }
+        return !(r.fecha_creacion === report.fecha_creacion && r.rubro_id === report.rubro_id && r.distrito === report.distrito);
+      });
+      localStorage.setItem('MACE_INCIDENTS_LIST', JSON.stringify(filtered));
+      return filtered;
+    });
+
+    return { success: true };
+  };
+
+  // Clear all reports from database (requires password '2026Mario')
+  const handleClearAllData = async (passwordAttempt?: string): Promise<boolean> => {
+    let key = passwordAttempt?.trim();
+    if (!key) {
+      const promptVal = window.prompt('Por seguridad, ingrese la clave autorizada para borrar todos los reportes (2026Mario):');
+      if (!promptVal) return false;
+      key = promptVal.trim();
+    }
+
+    if (key !== '2026Mario') {
+      alert('Clave incorrecta. Solo el personal autorizado con la clave "2026Mario" puede eliminar reportes.');
+      return false;
+    }
 
     setLoading(true);
     // 1. Clear server backup
     try {
-      await fetch('/api/reports', { method: 'DELETE' });
+      await fetch('/api/reports', {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-key': key
+        }
+      });
     } catch (e) {
       console.warn('Error al borrar en /api/reports:', e);
     }
@@ -531,15 +607,11 @@ export default function App() {
     const supabase = getSupabaseClient();
     if (supabase) {
       try {
-        const { error } = await supabase
+        await supabase
           .from(SUPABASE_TABLE_NAME)
           .delete()
-          .gte('rubro_id', 0); // targets all rows reliably
-        
-        if (error) {
-          console.warn('Error al borrar en Supabase:', error);
-        }
-      } catch (err: any) {
+          .neq('id', '00000000-0000-0000-0000-000000000000');
+      } catch (err) {
         console.warn('Error de red al borrar en Supabase:', err);
       }
     }
@@ -547,7 +619,7 @@ export default function App() {
     setReports([]);
     localStorage.removeItem('MACE_INCIDENTS_LIST');
     setLoading(false);
-    alert('¡Base de datos limpiada con éxito! Se eliminaron todos los registros de prueba para empezar con datos reales.');
+    return true;
   };
 
   const handleConfigChange = () => {
@@ -555,235 +627,244 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-950 font-sans antialiased pb-20 selection:bg-blue-200">
+    <div className="min-h-screen bg-slate-50 text-slate-950 font-sans antialiased pb-6 sm:pb-10 selection:bg-blue-200">
       
-      {/* Official Header with ONPE Logo on the left and compact options on the extreme right */}
-      <header className="bg-white border-b-4 border-blue-100 px-4 py-3.5 shadow-sm">
-        <div className="max-w-6xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
+      {/* Official Header with ONPE Logo and adjacent secondary action buttons */}
+      <header className="bg-white border-b-2 border-slate-200 px-3 sm:px-4 py-2 shadow-2xs">
+        <div className="max-w-5xl mx-auto flex items-center justify-between gap-3">
           
-          {/* Official ONPE Logo component */}
-          <OnpeLogo 
-            className="h-14 sm:h-18 md:h-20 w-auto" 
-            onClick={handleLogoClick} 
-          />
-          
-          {/* Extreme Right Navigation & Download Options - Only shown when authenticated */}
-          {isAuthenticated ? (
-            <div className="flex flex-wrap items-center justify-center md:justify-end gap-2 sm:gap-2.5">
-              {/* Option 1: Registrar */}
-              <button
-                id="tab-wizard"
-                onClick={() => setActiveTab('wizard')}
-                className={`px-3.5 py-2 sm:px-4.5 sm:py-2.5 rounded-xl font-extrabold text-xs sm:text-sm flex items-center gap-1.5 transition-all active:scale-95 border-2 ${
-                  activeTab === 'wizard'
-                    ? 'bg-blue-800 border-blue-800 text-white shadow-md shadow-blue-100'
-                    : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
-                }`}
-              >
-                <span className="text-sm sm:text-base">📝</span>
-                <span>Registrar</span>
-              </button>
+          {/* Left group: ONPE Logo + adjacent secondary tools (Reportes & Descargar) */}
+          <div className="flex items-center gap-2 sm:gap-3">
+            {/* Official ONPE Logo component */}
+            <OnpeLogo 
+              className="h-9 sm:h-11 w-auto cursor-pointer select-none" 
+              onClick={handleLogoClick} 
+            />
 
-              {/* Option 2: Ver Reportes */}
-              <button
-                id="tab-dashboard"
-                onClick={() => setActiveTab('dashboard')}
-                className={`px-3.5 py-2 sm:px-4.5 sm:py-2.5 rounded-xl font-extrabold text-xs sm:text-sm flex items-center gap-1.5 transition-all active:scale-95 border-2 ${
-                  activeTab === 'dashboard'
-                    ? 'bg-blue-800 border-blue-800 text-white shadow-md shadow-blue-100'
-                    : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
-                }`}
-              >
-                <span className="text-sm sm:text-base">📊</span>
-                <span>Reportes</span>
-              </button>
+            <div className="h-5 w-px bg-slate-200 hidden xs:block"></div>
+            
+            {/* Option 2: Compact Reportes Button */}
+            <button
+              id="btn-reportes-main"
+              onClick={() => setActiveTab(activeTab === 'dashboard' ? 'wizard' : 'dashboard')}
+              className={`px-2.5 py-1 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all active:scale-95 border cursor-pointer ${
+                activeTab === 'dashboard'
+                  ? 'bg-blue-800 border-blue-800 text-white shadow-xs'
+                  : 'bg-slate-100 hover:bg-slate-200 border-slate-200 text-slate-700'
+              }`}
+              title="Ver panel de reportes registrados"
+            >
+              <span className="text-xs">📊</span>
+              <span>Reportes</span>
+            </button>
 
-              {/* Option 3: Descargar Excel */}
-              <button
-                id="btn-download-excel-header"
-                onClick={() => exportToExcel(reports)}
-                className="px-3.5 py-2 sm:px-4.5 sm:py-2.5 rounded-xl font-extrabold text-xs sm:text-sm flex items-center gap-1.5 transition-all active:scale-95 border-2 bg-emerald-700 border-emerald-700 text-white hover:bg-emerald-800 shadow-md shadow-emerald-50"
-                title="Descargar todos los reportes en formato Excel (.xls)"
-              >
-                <Download className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-                <span>Excel</span>
-              </button>
+            {/* Option 3: Compact Descargar Excel Button (Requiere clave "2026Mario") */}
+            <button
+              id="btn-download-excel-header"
+              onClick={handleRequestExcelDownload}
+              className="p-1.5 rounded-lg border bg-emerald-50 border-emerald-300 hover:bg-emerald-100 hover:border-emerald-400 text-emerald-700 transition-all active:scale-95 cursor-pointer flex items-center justify-center shadow-2xs"
+              title="Descargar todos los reportes en formato Excel (.xls)"
+            >
+              <ArrowDownToLine className="w-3.5 h-3.5 text-emerald-600" />
+            </button>
 
-              {/* Option 4: Configuración Base de Datos (Supabase) */}
+            {/* Option 4: Configuración Supabase (Oculto - Se activa con 5 toques en el logo ONPE + clave) */}
+            {showConfigButton && (
               <button
                 id="tab-config"
                 onClick={() => setActiveTab('config')}
-                className={`px-3.5 py-2 sm:px-4.5 sm:py-2.5 rounded-xl font-extrabold text-xs sm:text-sm flex items-center gap-1.5 transition-all active:scale-95 border-2 ${
+                className={`p-1.5 rounded-lg border transition-all active:scale-95 cursor-pointer ${
                   activeTab === 'config'
-                    ? 'bg-blue-800 border-blue-800 text-white shadow-md shadow-blue-100'
-                    : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                    ? 'bg-indigo-800 border-indigo-800 text-white shadow-xs'
+                    : 'bg-slate-100 hover:bg-slate-200 border-slate-200 text-slate-600'
                 }`}
-                title="Opciones de Conexión de Datos (Supabase)"
+                title="Configuración de Base de Datos Supabase (Admin)"
               >
-                <Settings className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-                <span>Base de Datos</span>
+                <Settings className="w-3.5 h-3.5" />
               </button>
+            )}
+          </div>
 
-              {/* Option 5: Cerrar sesión / Bloquear */}
+          {/* Right group: Return to form if on other tab & subtle connection dot */}
+          <div className="flex items-center gap-2">
+            {activeTab !== 'wizard' && (
               <button
-                id="btn-signout"
-                onClick={handleSignOut}
-                className="px-3.5 py-2 sm:px-4.5 sm:py-2.5 rounded-xl font-extrabold text-xs sm:text-sm bg-rose-50 border-2 border-rose-200 text-rose-700 hover:bg-rose-100 transition-all active:scale-95 flex items-center gap-1.5"
-                title="Bloquear panel y ocultar opciones administrativas"
+                id="btn-volver-registro"
+                onClick={() => setActiveTab('wizard')}
+                className="px-2.5 py-1 rounded-lg bg-blue-800 hover:bg-blue-900 text-white font-extrabold text-xs flex items-center gap-1 shadow-xs transition-all cursor-pointer active:scale-95"
               >
-                <span className="text-sm sm:text-base">🔒</span>
-                <span>Bloquear</span>
+                <span>📝</span>
+                <span>Llenar Reporte</span>
               </button>
+            )}
+
+            {/* Minimalist Connection Indicator */}
+            <div 
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-semibold ${
+                isSupabaseActive 
+                  ? 'text-emerald-800 bg-emerald-50 border-emerald-200' 
+                  : 'text-amber-800 bg-amber-50 border-amber-200'
+              }`}
+              title={isSupabaseActive ? 'Base de datos Supabase conectada' : 'Conectando con Supabase'}
+            >
+              <span className={`w-2 h-2 rounded-full ${isSupabaseActive ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`}></span>
+              <span className="hidden sm:inline">{isSupabaseActive ? 'En línea' : 'Conectando'}</span>
             </div>
-          ) : (
-            <div className="flex items-center gap-2 text-xs font-semibold">
-              {isSupabaseActive ? (
-                <div className="flex items-center gap-1.5 text-emerald-800 bg-emerald-50 px-3 py-1.5 rounded-full border border-emerald-200 shadow-sm">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                  <span className="font-bold">En línea</span>
-                </div>
-              ) : (
-                <div className="flex items-center gap-1.5 text-amber-800 bg-amber-50 px-3 py-1.5 rounded-full border border-amber-200 shadow-sm">
-                  <span className="w-2 h-2 rounded-full bg-amber-500"></span>
-                  <span className="font-bold">Sin conexión</span>
-                </div>
-              )}
-            </div>
-          )}
+          </div>
         </div>
       </header>
 
       {/* Main Container */}
-      <main className="max-w-6xl mx-auto px-4 pt-6 space-y-6">
+      <main className="max-w-4xl mx-auto px-3 sm:px-4 pt-3 sm:pt-4 space-y-3">
         
         {/* Dynamic PWA Installation Prompts */}
         <PWAInstallButton />
 
-        {/* Loading Indicator */}
-        {loading && (
-          <div className="text-center py-6">
-            <div className="inline-block animate-spin rounded-full h-8 w-8 border-4 border-blue-700 border-t-transparent"></div>
-            <p className="text-slate-600 font-bold mt-2">Cargando base de datos en tiempo real...</p>
-          </div>
-        )}
-
         {/* View Layout wrapper with high-quality exit/enter animations */}
         <AnimatePresence mode="wait">
-          {!loading && (
-            <motion.div
-              key={activeTab}
-              initial={{ opacity: 0, y: 15 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -15 }}
-              transition={{ duration: 0.25 }}
-              className="focus:outline-none"
-            >
-              
-              {activeTab === 'wizard' && (
-                <div className="space-y-4">
-                  <DistrictWizard 
-                    onReportSubmit={handleReportsSubmit} 
-                    onViewReportsClick={() => handleAccessAttempt('dashboard')} 
-                    isSupabaseActive={isSupabaseActive}
-                  />
-                </div>
-              )}
-
-              {activeTab === 'dashboard' && (
-                <RealTimeDashboard reports={reports} onClearAllData={handleClearAllData} />
-              )}
-
-              {activeTab === 'config' && (
-                <SupabaseConfig 
-                  onConfigChange={handleConfigChange}
-                  onLoadDemoData={handleLoadDemoData}
-                  onClearAllData={handleClearAllData}
-                  totalRecords={reports.length}
+          <motion.div
+            key={activeTab}
+            initial={{ opacity: 0, y: 15 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -15 }}
+            transition={{ duration: 0.25 }}
+            className="focus:outline-none"
+          >
+            
+            {activeTab === 'wizard' && (
+              <div className="space-y-4">
+                <DistrictWizard 
+                  onReportSubmit={handleReportsSubmit} 
+                  onViewReportsClick={() => setActiveTab('dashboard')} 
+                  isSupabaseActive={isSupabaseActive}
+                  totalReportsCount={reports.length}
                 />
-              )}
+              </div>
+            )}
 
-            </motion.div>
-          )}
+            {activeTab === 'dashboard' && (
+              <RealTimeDashboard 
+                reports={reports} 
+                onClearAllData={handleClearAllData}
+                onDeleteSingleReport={handleDeleteSingleReport}
+              />
+            )}
+
+            {activeTab === 'config' && (
+              <SupabaseConfig 
+                onConfigChange={handleConfigChange}
+                onLoadDemoData={handleLoadDemoData}
+                onClearAllData={handleClearAllData}
+                totalRecords={reports.length}
+              />
+            )}
+
+          </motion.div>
         </AnimatePresence>
-
-        {/* Password Modal protection for access to reports or excel */}
-        <AnimatePresence>
-          {showPasswordModal && (
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-50 flex items-center justify-center p-4"
-            >
-              <motion.div
-                initial={{ scale: 0.95, y: 15 }}
-                animate={{ scale: 1, y: 0 }}
-                exit={{ scale: 0.95, y: 15 }}
-                className="bg-white rounded-3xl p-6 md:p-8 max-w-md w-full shadow-2xl border-2 border-slate-150 relative text-center space-y-6"
-              >
-                <button
-                  onClick={() => setShowPasswordModal(false)}
-                  className="absolute top-4 right-4 p-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-500 hover:text-slate-900 transition-all active:scale-95"
-                >
-                  ✕
-                </button>
-
-                <div className="mx-auto w-14 h-14 bg-blue-50 text-blue-800 rounded-2xl flex items-center justify-center text-3xl shadow-sm">
-                  🔐
-                </div>
-
-                <div className="space-y-1.5">
-                  <h3 className="text-xl font-black text-slate-900 tracking-tight animate-pulse">Acceso Restringido</h3>
-                  <p className="text-sm font-bold text-slate-500">Ingrese la clave de seguridad para visualizar o descargar los reportes MACE.</p>
-                </div>
-
-                <form onSubmit={handleVerifyPassword} className="space-y-4">
-                  <div className="space-y-2 text-left">
-                    <label className="text-xs font-extrabold text-slate-400 uppercase tracking-wider block">Clave de Acceso</label>
-                    <input
-                      type="password"
-                      autoFocus
-                      required
-                      placeholder="••••••••"
-                      value={passwordInput}
-                      onChange={(e) => {
-                        setPasswordInput(e.target.value);
-                        setPasswordError('');
-                      }}
-                      className="w-full px-4 py-3 bg-slate-50 border-2 border-slate-200 focus:border-blue-700 rounded-xl font-bold text-center text-slate-900 focus:outline-none placeholder-slate-300 text-lg transition-all"
-                    />
-                    {passwordError && (
-                      <p className="text-xs font-black text-rose-600 text-center animate-bounce mt-1">
-                        ⚠️ {passwordError}
-                      </p>
-                    )}
-                  </div>
-
-                  <div className="flex gap-3">
-                    <button
-                      type="button"
-                      onClick={() => setShowPasswordModal(false)}
-                      className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 active:scale-98 transition-all rounded-xl font-extrabold text-sm text-slate-700"
-                    >
-                      Cancelar
-                    </button>
-                    <button
-                      type="submit"
-                      className="flex-1 py-3 bg-blue-800 hover:bg-blue-900 active:scale-98 transition-all text-white rounded-xl font-extrabold text-sm shadow-md shadow-blue-100"
-                    >
-                      Ingresar
-                    </button>
-                  </div>
-                </form>
-              </motion.div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
       </main>
 
       {/* Dynamic Offline status detector banner */}
       <OfflineIndicator />
+
+      {/* Security Auth Modal for Excel Download and Secret Admin Config ("2026Mario") */}
+      <AnimatePresence>
+        {authModalAction && (
+          <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0, y: 10 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.95, opacity: 0, y: 10 }}
+              className="bg-white rounded-3xl p-6 sm:p-8 max-w-md w-full shadow-2xl border-2 border-slate-200 relative space-y-5 text-left"
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  setAuthModalAction(null);
+                  setAuthPasswordInput('');
+                  setAuthPasswordError('');
+                }}
+                className="absolute top-4 right-4 p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-500 hover:text-slate-800 transition-colors cursor-pointer"
+              >
+                ✕
+              </button>
+
+              <div className="flex items-center gap-3">
+                <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-2xl shrink-0 shadow-inner ${
+                  authModalAction === 'excel' ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-100 text-blue-700'
+                }`}>
+                  {authModalAction === 'excel' ? <ArrowDownToLine className="w-6 h-6 text-emerald-600" /> : <Settings className="w-6 h-6 text-blue-700" />}
+                </div>
+                <div>
+                  <h3 className="text-xl font-black text-slate-900 leading-tight">
+                    {authModalAction === 'excel' ? 'Descargar Reportes Excel' : 'Configuración de Base de Datos'}
+                  </h3>
+                  <span className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1">
+                    <Lock className="w-3 h-3 text-slate-400" />
+                    Acceso Protegido
+                  </span>
+                </div>
+              </div>
+
+              <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl text-xs sm:text-sm font-medium text-slate-700">
+                <p className="font-bold text-slate-900 leading-relaxed">
+                  {authModalAction === 'excel' 
+                    ? 'Ingrese la clave de seguridad para autorizar la exportación de todos los reportes a formato Excel (.xls).'
+                    : 'Modo Administrador activado tras 5 toques en el logo ONPE. Ingrese la clave de seguridad para acceder a la configuración de Supabase.'
+                  }
+                </p>
+              </div>
+
+              <form onSubmit={handleAuthSubmit} className="space-y-4">
+                <div className="space-y-1.5 text-left">
+                  <label className="text-xs font-black text-slate-600 uppercase tracking-wider block">
+                    Clave de Acceso:
+                  </label>
+                  <input
+                    type="password"
+                    autoFocus
+                    required
+                    placeholder="••••••••"
+                    value={authPasswordInput}
+                    onChange={(e) => {
+                      setAuthPasswordInput(e.target.value);
+                      setAuthPasswordError('');
+                    }}
+                    className="w-full px-4 py-3 bg-slate-50 border-2 border-slate-300 focus:border-blue-600 rounded-xl font-bold text-slate-900 text-center tracking-wider text-base focus:outline-none transition-all placeholder-slate-400"
+                  />
+                  {authPasswordError && (
+                    <p className="text-xs font-black text-rose-600 bg-rose-50 border border-rose-200 p-2.5 rounded-xl text-center animate-bounce">
+                      ⚠️ {authPasswordError}
+                    </p>
+                  )}
+                </div>
+
+                <div className="flex gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAuthModalAction(null);
+                      setAuthPasswordInput('');
+                      setAuthPasswordError('');
+                    }}
+                    className="flex-1 py-3 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-sm rounded-xl transition-all cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    className={`flex-1 py-3 px-4 text-white font-black text-sm rounded-xl shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer active:scale-95 ${
+                      authModalAction === 'excel' ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-blue-800 hover:bg-blue-900'
+                    }`}
+                  >
+                    <KeyRound className="w-4 h-4" />
+                    <span>Confirmar</span>
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
     </div>
   );

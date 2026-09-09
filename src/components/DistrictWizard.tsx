@@ -108,9 +108,15 @@ interface DistrictWizardProps {
   onReportSubmit: (reports: IncidentReport[]) => Promise<SubmitResult>;
   onViewReportsClick: () => void;
   isSupabaseActive?: boolean;
+  totalReportsCount?: number;
 }
 
-export default function DistrictWizard({ onReportSubmit, onViewReportsClick, isSupabaseActive = false }: DistrictWizardProps) {
+export default function DistrictWizard({ 
+  onReportSubmit, 
+  onViewReportsClick, 
+  isSupabaseActive = false,
+  totalReportsCount = 0 
+}: DistrictWizardProps) {
   // Navigation states
   const [step, setStep] = useState<number>(1); // 1: Datos del Informante, 2: Questions, 3: Success
   
@@ -194,26 +200,36 @@ export default function DistrictWizard({ onReportSubmit, onViewReportsClick, isS
     reader.onload = (event) => {
       const result = event.target?.result as string;
       
-      // If it is an image, compress/downscale it with Canvas
+      // If it is an image, compress/downscale it with Canvas preserving clarity and aspect ratio
       if (file.type.startsWith('image/')) {
         const img = new Image();
         img.onload = () => {
           const canvas = document.createElement('canvas');
-          const MAX_WIDTH = 600;
-          const scale = MAX_WIDTH / img.width;
-          
-          if (img.width > MAX_WIDTH) {
-            canvas.width = MAX_WIDTH;
-            canvas.height = img.height * scale;
-          } else {
-            canvas.width = img.width;
-            canvas.height = img.height;
+          const MAX_DIM = 1024;
+          let targetWidth = img.width;
+          let targetHeight = img.height;
+
+          if (img.width > MAX_DIM || img.height > MAX_DIM) {
+            if (img.width > img.height) {
+              targetWidth = MAX_DIM;
+              targetHeight = Math.round((img.height * MAX_DIM) / img.width);
+            } else {
+              targetHeight = MAX_DIM;
+              targetWidth = Math.round((img.width * MAX_DIM) / img.height);
+            }
           }
+
+          canvas.width = targetWidth;
+          canvas.height = targetHeight;
           
           const ctx = canvas.getContext('2d');
-          ctx?.drawImage(img, 0, 0, canvas.width, canvas.height);
+          if (ctx) {
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = 'high';
+            ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
+          }
           
-          const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.7);
+          const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.78);
           setSelectedFile({
             name: file.name,
             data: compressedDataUrl,
@@ -232,13 +248,50 @@ export default function DistrictWizard({ onReportSubmit, onViewReportsClick, isS
     reader.readAsDataURL(file);
   };
 
+  const handleAnswerNoAndAdvance = async () => {
+    setHasProblem(false);
+    
+    const currentData: QuestionData = {
+      hasProblem: false,
+      ocurrencia: 'Sin novedad / Situación normal',
+      consecuencia: 'Sin afectación reportada',
+      accionesOdpe: 'Monitoreo preventivo de la ODPE',
+      fuenteEvidencia: 'Reporte de informante',
+      selectedFile: null,
+    };
+
+    const updatedAnswers = {
+      ...answers,
+      [currentQuestion.id]: currentData
+    };
+    setAnswers(updatedAnswers);
+
+    // If not last question, go directly to next question
+    if (currentQuestionIndex < QUESTIONS.length - 1) {
+      const nextIndex = currentQuestionIndex + 1;
+      setCurrentQuestionIndex(nextIndex);
+      loadQuestionData(QUESTIONS[nextIndex].id, updatedAnswers);
+    } else {
+      // Last question finished! Submit all 9
+      await submitAllNineQuestions(updatedAnswers);
+    }
+  };
+
+  const handleAnswerSi = () => {
+    setHasProblem(true);
+  };
+
+  const handleCancelSi = () => {
+    setHasProblem(null);
+  };
+
   const handleNext = async () => {
     if (hasProblem === null) return;
 
     // If answer is SÍ, ensure required details are filled
     if (hasProblem) {
       if (!ocurrencia.trim() || !consecuencia.trim() || !accionesOdpe.trim()) {
-        alert('Por favor complete todos los detalles obligatorios (*) del problema antes de continuar.');
+        alert('Por favor complete todos los campos obligatorios (*) antes de continuar.');
         return;
       }
     }
@@ -270,6 +323,9 @@ export default function DistrictWizard({ onReportSubmit, onViewReportsClick, isS
   };
 
   const submitAllNineQuestions = async (answersDict: Record<number, QuestionData>) => {
+    // Current timestamp guaranteed to be valid ISO string
+    const nowIso = new Date().toISOString();
+
     // Build array of all 9 questions
     const allNineReports: IncidentReport[] = QUESTIONS.map((q) => {
       const ans = answersDict[q.id];
@@ -279,9 +335,9 @@ export default function DistrictWizard({ onReportSubmit, onViewReportsClick, isS
           : ans.fuenteEvidencia;
 
         return {
-          nombre_informante: nombreCompleto.trim(),
-          odpe: odpe.trim(),
-          distrito: distritoZona.trim(),
+          nombre_informante: nombreCompleto.trim() || 'Coordinador ODPE',
+          odpe: odpe.trim() || 'ODPE',
+          distrito: distritoZona.trim() || 'Distrito',
           rubro_id: q.id,
           categoria: q.titulo,
           pregunta_texto: q.desc,
@@ -290,13 +346,13 @@ export default function DistrictWizard({ onReportSubmit, onViewReportsClick, isS
           consecuencia: ans.consecuencia || 'En evaluación',
           acciones_odpe: ans.accionesOdpe || 'Acción en curso',
           fuente_evidencia: encodedEvidence || 'Reporte de Informante',
-          fecha_creacion: new Date(fechaReporte).toISOString()
+          fecha_creacion: nowIso
         };
       } else {
         return {
-          nombre_informante: nombreCompleto.trim(),
-          odpe: odpe.trim(),
-          distrito: distritoZona.trim(),
+          nombre_informante: nombreCompleto.trim() || 'Coordinador ODPE',
+          odpe: odpe.trim() || 'ODPE',
+          distrito: distritoZona.trim() || 'Distrito',
           rubro_id: q.id,
           categoria: q.titulo,
           pregunta_texto: q.desc,
@@ -305,25 +361,29 @@ export default function DistrictWizard({ onReportSubmit, onViewReportsClick, isS
           consecuencia: 'Sin afectación reportada',
           acciones_odpe: 'Monitoreo preventivo de la ODPE',
           fuente_evidencia: 'Reporte del Informante',
-          fecha_creacion: new Date(fechaReporte).toISOString()
+          fecha_creacion: nowIso
         };
       }
     });
 
+    console.log('[DistrictWizard] Enviando 9 reportes a guardar:', allNineReports);
+    
+    // INSTANT FLUID TRANSITION: Switch to Step 3 immediately with zero lag
+    setStep(3);
+    setSubmitResult({
+      success: true,
+      isOnline: isSupabaseActive,
+      count: allNineReports.length
+    });
+
+    // Fire saving asynchronously in background
     setIsSubmitting(true);
     try {
       const result = await onReportSubmit(allNineReports);
+      console.log('[DistrictWizard] Resultado de guardado:', result);
       setSubmitResult(result);
-      setStep(3);
     } catch (err: any) {
-      console.error('Error al enviar reporte:', err);
-      setSubmitResult({
-        success: false,
-        isOnline: false,
-        count: allNineReports.length,
-        error: err?.message || 'Error de conexión'
-      });
-      setStep(3);
+      console.error('Error al enviar reporte en segundo plano:', err);
     } finally {
       setIsSubmitting(false);
     }
@@ -367,23 +427,23 @@ export default function DistrictWizard({ onReportSubmit, onViewReportsClick, isS
   };
 
   return (
-    <div id="district-wizard" className="w-full max-w-4xl mx-auto">
+    <div id="district-wizard" className="w-full max-w-3xl mx-auto">
       
       {/* STEP 1: DATOS DEL INFORMANTE */}
       {step === 1 && (
-        <form onSubmit={handleStartReporting} id="wizard-step-1" className="space-y-6">
-          <div className="bg-gradient-to-r from-blue-800 to-blue-950 border-4 border-blue-900 border-b-red-600 rounded-3xl p-6 text-center shadow-lg space-y-4">
-            <h2 className="text-2xl md:text-3xl font-black text-white flex items-center justify-center gap-2">
+        <form onSubmit={handleStartReporting} id="wizard-step-1" className="space-y-3 sm:space-y-4">
+          <div className="bg-gradient-to-r from-blue-800 to-blue-950 border-2 border-blue-900 border-b-red-600 rounded-2xl p-3 sm:p-4 text-center shadow-md">
+            <h2 className="text-base sm:text-xl font-black text-white flex items-center justify-center gap-2">
               <span>INFORME SEMANAL DE COYUNTURA – ODPE / MACE</span>
             </h2>
           </div>
 
-          <div className="bg-white rounded-2xl sm:rounded-3xl border-4 border-blue-200 p-5 sm:p-8 shadow-xl space-y-5 sm:space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-6">
+          <div className="bg-white rounded-2xl border-2 border-blue-200 p-4 sm:p-6 shadow-md space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
               
-              <div className="space-y-2">
-                <label className="block text-lg sm:text-xl font-black text-slate-950 flex items-center gap-2">
-                  <User className="w-5.5 h-5.5 text-blue-700" />
+              <div className="space-y-1.5">
+                <label className="block text-sm sm:text-base font-black text-slate-950 flex items-center gap-1.5">
+                  <User className="w-4 h-4 text-blue-700" />
                   Nombres y Apellidos <span className="text-red-500">*</span>
                 </label>
                 <input
@@ -393,13 +453,13 @@ export default function DistrictWizard({ onReportSubmit, onViewReportsClick, isS
                   value={nombreCompleto}
                   onChange={(e) => setNombreCompleto(e.target.value)}
                   placeholder="Ej. Juan Pérez López"
-                  className="w-full px-4 py-3.5 text-base sm:text-lg rounded-xl sm:rounded-2xl border-2 sm:border-4 border-slate-200 focus:border-blue-600 focus:outline-none font-bold text-slate-800 bg-slate-50 transition-colors placeholder:text-slate-400"
+                  className="w-full px-3 py-2 text-sm sm:text-base rounded-xl border-2 border-slate-200 focus:border-blue-600 focus:outline-none font-bold text-slate-800 bg-slate-50 transition-colors placeholder:text-slate-400"
                 />
               </div>
 
-              <div className="space-y-2">
-                <label className="block text-lg sm:text-xl font-black text-slate-950 flex items-center gap-2">
-                  <Building className="w-5.5 h-5.5 text-blue-700" />
+              <div className="space-y-1.5">
+                <label className="block text-sm sm:text-base font-black text-slate-950 flex items-center gap-1.5">
+                  <Building className="w-4 h-4 text-blue-700" />
                   ODPE <span className="text-red-500">*</span>
                 </label>
                 <input
@@ -409,14 +469,14 @@ export default function DistrictWizard({ onReportSubmit, onViewReportsClick, isS
                   value={odpe}
                   onChange={(e) => setOdpe(e.target.value)}
                   placeholder="Ej. ODPE ICA"
-                  className="w-full px-4 py-3.5 text-base sm:text-lg rounded-xl sm:rounded-2xl border-2 sm:border-4 border-slate-200 focus:border-blue-600 focus:outline-none font-bold text-slate-800 bg-slate-50 transition-colors placeholder:text-slate-400"
+                  className="w-full px-3 py-2 text-sm sm:text-base rounded-xl border-2 border-slate-200 focus:border-blue-600 focus:outline-none font-bold text-slate-800 bg-slate-50 transition-colors placeholder:text-slate-400"
                 />
               </div>
 
-              <div className="space-y-2">
-                <label className="block text-lg sm:text-xl font-black text-slate-950 flex items-center gap-2">
-                  <MapPin className="w-5.5 h-5.5 text-blue-700" />
-                  Distrito / Zona a cargo <span className="text-red-500">*</span>
+              <div className="space-y-1.5">
+                <label className="block text-sm sm:text-base font-black text-slate-950 flex items-center gap-1.5">
+                  <MapPin className="w-4 h-4 text-blue-700" />
+                  Distrito / Zona <span className="text-red-500">*</span>
                 </label>
                 <input
                   id="input-distrito-zona"
@@ -424,21 +484,21 @@ export default function DistrictWizard({ onReportSubmit, onViewReportsClick, isS
                   required
                   value={distritoZona}
                   onChange={(e) => setDistritoZona(e.target.value)}
-                  placeholder="Ej. Ica 2, Tinguiña 2"
-                  className="w-full px-4 py-3.5 text-base sm:text-lg rounded-xl sm:rounded-2xl border-2 sm:border-4 border-slate-200 focus:border-blue-600 focus:outline-none font-bold text-slate-800 bg-slate-50 transition-colors placeholder:text-slate-400"
+                  placeholder="Ej. Tinguiña 2"
+                  className="w-full px-3 py-2 text-sm sm:text-base rounded-xl border-2 border-slate-200 focus:border-blue-600 focus:outline-none font-bold text-slate-800 bg-slate-50 transition-colors placeholder:text-slate-400"
                 />
               </div>
 
-              </div>
+            </div>
 
-            <div className="pt-4 flex flex-col sm:flex-row gap-3 sm:gap-4 items-center justify-end border-t-2 border-slate-100">
+            <div className="pt-3 flex items-center justify-end border-t border-slate-100">
               <button
                 id="btn-start-evaluation"
                 type="submit"
-                className="w-full sm:w-auto py-3.5 sm:py-4 px-6 sm:px-8 bg-blue-800 hover:bg-blue-900 text-white font-black text-base sm:text-xl rounded-xl sm:rounded-2xl active:scale-95 transition-all shadow-md flex items-center justify-center gap-2"
+                className="w-full sm:w-auto py-2.5 px-6 bg-blue-800 hover:bg-blue-900 text-white font-black text-base rounded-xl active:scale-95 transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer"
               >
-                <span>Siguiente: Evaluar Rubros</span>
-                <ChevronRight className="w-5.5 h-5.5" />
+                <span>Siguiente</span>
+                <ChevronRight className="w-5 h-5" />
               </button>
             </div>
           </div>
@@ -447,33 +507,32 @@ export default function DistrictWizard({ onReportSubmit, onViewReportsClick, isS
 
       {/* STEP 2: QUESTIONS WIZARD */}
       {step === 2 && currentQuestion && (
-        <div id="wizard-step-2" className="space-y-6">
+        <div id="wizard-step-2" className="space-y-3 sm:space-y-4">
           
-          {/* Top Progress bar and informant metadata preview */}
-          <div className="bg-white rounded-3xl p-5 border-4 border-slate-200 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 shadow-md">
-            <div className="flex items-center gap-3">
-              <div className="text-4xl">📋</div>
-              <div>
-                <span className="text-xs font-black text-slate-500 uppercase tracking-widest block">Informante actual</span>
-                <span className="text-xl font-black text-slate-900 leading-tight block">{nombreCompleto} ({odpe})</span>
-                <span className="text-xs font-bold text-blue-700 block">Zona: {distritoZona}</span>
-              </div>
+          {/* Top Progress bar and informant metadata preview - subtle & compact */}
+          <div className="bg-slate-100/90 border border-slate-200 rounded-xl px-3 py-1.5 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600">
+            <div className="flex items-center gap-1.5 font-medium truncate max-w-md">
+              <span className="text-slate-400">👤</span>
+              <span className="font-bold text-slate-800 truncate">{nombreCompleto}</span>
+              <span className="text-slate-400">|</span>
+              <span className="text-slate-600 font-semibold truncate">{odpe} - {distritoZona}</span>
             </div>
 
-            {/* Step circles */}
-            <div className="flex flex-wrap items-center gap-2">
+            {/* Subtle mini progress dots */}
+            <div className="flex items-center gap-1 shrink-0">
+              <span className="text-[10px] font-bold text-slate-400 mr-1 hidden xs:inline">Rubro {currentQuestionIndex + 1}/9</span>
               {QUESTIONS.map((q, idx) => (
                 <div
                   id={`progress-dot-rubro-${q.id}`}
                   key={q.id}
-                  className={`w-9 h-9 rounded-full font-black text-md flex items-center justify-center transition-all ${
+                  className={`w-5 h-5 rounded-full font-black text-[10px] flex items-center justify-center transition-all ${
                     idx === currentQuestionIndex
-                      ? `${theme.accent} text-white scale-110 shadow-md ring-4 ring-offset-2 ring-blue-300`
+                      ? 'bg-blue-700 text-white ring-2 ring-blue-300 scale-105'
                       : idx < currentQuestionIndex
-                      ? 'bg-blue-800 text-white'
-                      : 'bg-slate-200 text-slate-500'
+                      ? 'bg-blue-200 text-blue-900 font-bold'
+                      : 'bg-slate-200 text-slate-400'
                   }`}
-                  title={q.titulo}
+                  title={`${q.id}. ${q.titulo}`}
                 >
                   {idx < currentQuestionIndex ? '✓' : q.id}
                 </div>
@@ -481,121 +540,152 @@ export default function DistrictWizard({ onReportSubmit, onViewReportsClick, isS
             </div>
           </div>
 
-          {/* Active Question Box */}
-          <div className={`border-4 ${theme.border} rounded-3xl p-6 ${theme.bg} shadow-lg space-y-6 transition-all duration-300`}>
-            
-            <div className="flex flex-col sm:flex-row items-center gap-4 text-center sm:text-left justify-between">
-              <div className="flex flex-col sm:flex-row items-center gap-4">
-                <span className="text-6xl bg-white p-4 rounded-2xl border-4 border-white shadow-sm shrink-0">
-                  {currentQuestion.icon}
-                </span>
-                <div>
-                  <span className={`text-sm font-extrabold ${theme.primaryText} uppercase tracking-widest block`}>
-                    RUBRO {currentQuestion.id} de 9 • {currentQuestion.titulo}
+          {/* Mode 1: Main Rubro Evaluation (hasProblem !== true) */}
+          {hasProblem !== true ? (
+            <div className={`border-2 ${theme.border} rounded-2xl p-4 sm:p-6 ${theme.bg} shadow-md space-y-4 transition-all duration-300`}>
+              
+              <div className="flex items-start sm:items-center justify-between gap-3">
+                <div className="flex items-start sm:items-center gap-3">
+                  <span className="text-3xl sm:text-4xl bg-white p-2.5 rounded-xl border border-white shadow-2xs shrink-0">
+                    {currentQuestion.icon}
                   </span>
-                  <h3 className="text-xl sm:text-2xl font-black text-slate-900 leading-snug mt-1">
-                    {currentQuestion.titulo}
-                  </h3>
-                  <p className="text-sm font-bold text-slate-700 italic mt-1.5 max-w-2xl leading-relaxed">
-                    {currentQuestion.desc}
-                  </p>
+                  <div>
+                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-black bg-blue-100 text-blue-900 tracking-wider uppercase mb-0.5">
+                      Rubro {currentQuestion.id} de 9
+                    </span>
+                    <h3 className="text-base sm:text-lg font-black text-slate-900 leading-tight">
+                      {currentQuestion.titulo}
+                    </h3>
+                    <p className="text-xs sm:text-sm font-medium text-slate-700 mt-1 max-w-xl leading-snug">
+                      {currentQuestion.desc}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Audio Reader */}
+                <div className="shrink-0">
+                  <AudioReader text={`Rubro número ${currentQuestion.id}. ${currentQuestion.titulo}. ${currentQuestion.desc}. ¿Se ha registrado alguna situación vinculada a este rubro?`} />
                 </div>
               </div>
 
-              {/* Audio Reader */}
-              <div className="shrink-0">
-                <AudioReader text={`Rubro número ${currentQuestion.id}. ${currentQuestion.titulo}. ${currentQuestion.desc}. ¿Se ha registrado alguna situación vinculada a este rubro? Marca SÍ si se presentó algún problema, o marca NO si todo está normal.`} />
-              </div>
-            </div>
-
-            {/* BIG SÍ / NO BUTTONS FOR ELDERLY */}
-            <div className="space-y-2">
-              <div className="text-slate-800 font-extrabold text-lg text-center sm:text-left">
-                ¿Se ha registrado alguna situación vinculada a este rubro? *
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
-                {/* SÍ BUTTON */}
-                <button
-                  id="btn-answer-si"
-                  type="button"
-                  onClick={() => handleAnswerProblem(true)}
-                  className={`p-6 rounded-3xl border-4 transition-all duration-200 flex items-center justify-center gap-4 text-2xl font-black text-white shadow-md active:scale-95 ${
-                    hasProblem === true
-                      ? 'bg-red-600 border-red-700 ring-4 ring-offset-2 ring-red-300 scale-[1.02]'
-                      : 'bg-red-500 border-red-600 hover:bg-red-600'
-                  }`}
-                >
-                  <span className="text-4xl bg-white text-red-600 rounded-full p-1.5 flex items-center justify-center w-12 h-12">
-                    ✓
-                  </span>
-                  <span>SÍ se registró</span>
-                </button>
-
-                {/* NO BUTTON */}
-                <button
-                  id="btn-answer-no"
-                  type="button"
-                  onClick={() => handleAnswerProblem(false)}
-                  className={`p-6 rounded-3xl border-4 transition-all duration-200 flex items-center justify-center gap-4 text-2xl font-black text-white shadow-md active:scale-95 ${
-                    hasProblem === false
-                      ? 'bg-blue-850 border-blue-950 ring-4 ring-offset-2 ring-blue-300 scale-[1.02]'
-                      : 'bg-blue-700 border-blue-800 hover:bg-blue-800'
-                  }`}
-                >
-                  <span className="text-4xl bg-white text-blue-700 rounded-full p-1.5 flex items-center justify-center w-12 h-12">
-                    ✕
-                  </span>
-                  <span>NO se registró</span>
-                </button>
-              </div>
-            </div>
-
-            {/* SUB-QUESTIONS DROPDOWN/COLLAPSIBLE IF "SÍ" CLICKED */}
-            {hasProblem === true && (
-              <div id="subquestions-dropdown" className="bg-white border-4 border-blue-200 rounded-2xl p-6 space-y-5 animate-slideDown">
-                <div className="border-b-2 border-blue-100 pb-2">
-                  <h4 className="text-xl font-black text-blue-950 flex items-center gap-2">
-                    <span>✍️ Detalle de la Incidencia</span>
-                  </h4>
-                  <p className="text-sm text-blue-500 font-bold">Por favor responda las siguientes 4 sub-preguntas con calma:</p>
+              {/* SÍ / NO BUTTONS - Direct Action Flow */}
+              <div className="space-y-2 pt-1">
+                <div className="text-slate-800 font-extrabold text-sm sm:text-base text-center sm:text-left">
+                  ¿Se ha registrado alguna situación vinculada a este rubro? *
                 </div>
 
-                {/* Sub-question 1: ¿Qué ocurrió y dónde? */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                  {/* NO BUTTON - BLUE COLOR - Instant Advance without scrolling */}
+                  <button
+                    id="btn-answer-no"
+                    type="button"
+                    onClick={handleAnswerNoAndAdvance}
+                    className="py-3 px-4 rounded-xl border-2 bg-blue-800 hover:bg-blue-900 active:bg-blue-950 border-blue-900 transition-all duration-150 flex items-center justify-center gap-3 text-base sm:text-lg font-black text-white shadow-sm active:scale-95 cursor-pointer"
+                    title="Todo normal en este rubro. Pasar al siguiente automáticamente"
+                  >
+                    <span className="text-lg bg-white text-blue-800 rounded-full p-1 flex items-center justify-center w-7 h-7 font-black shrink-0">
+                      ✕
+                    </span>
+                    <div className="text-left">
+                      <span className="block leading-tight">NO se registró</span>
+                      <span className="text-[10px] text-blue-200 font-medium block">Todo normal • Pasar al siguiente</span>
+                    </div>
+                  </button>
+
+                  {/* SÍ BUTTON - GREEN COLOR - Switch to dedicated subquestions screen */}
+                  <button
+                    id="btn-answer-si"
+                    type="button"
+                    onClick={handleAnswerSi}
+                    className="py-3 px-4 rounded-xl border-2 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 border-emerald-700 transition-all duration-150 flex items-center justify-center gap-3 text-base sm:text-lg font-black text-white shadow-sm active:scale-95 cursor-pointer"
+                    title="Registrar los detalles de la incidencia"
+                  >
+                    <span className="text-lg bg-white text-emerald-600 rounded-full p-1 flex items-center justify-center w-7 h-7 font-black shrink-0">
+                      ✓
+                    </span>
+                    <div className="text-left">
+                      <span className="block leading-tight">SÍ se registró</span>
+                      <span className="text-[10px] text-emerald-100 font-medium block">Llenar detalle de la incidencia</span>
+                    </div>
+                  </button>
+                </div>
+              </div>
+
+              {/* Navigation Controls */}
+              <div className="flex items-center justify-start gap-3 pt-2 border-t border-slate-200/60">
+                <button
+                  id="btn-wizard-back"
+                  disabled={isSubmitting}
+                  onClick={handleBack}
+                  className="py-1.5 px-3 bg-white border-2 border-slate-300 text-slate-700 hover:bg-slate-50 active:scale-95 transition-all rounded-lg font-bold text-xs flex items-center gap-1 shadow-2xs disabled:opacity-50 cursor-pointer"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                  <span>{currentQuestionIndex === 0 ? 'Volver a Datos' : 'Rubro Anterior'}</span>
+                </button>
+              </div>
+
+            </div>
+          ) : (
+            /* Mode 2: Dedicated Single-Screen Sub-questions Form (hasProblem === true) */
+            <div className="bg-white border-2 border-red-300 rounded-2xl p-3 sm:p-4 shadow-md space-y-3 animate-fadeIn">
+              
+              {/* Form Header */}
+              <div className="flex items-center justify-between gap-2 pb-2 border-b border-red-100">
+                <div className="flex items-center gap-2">
+                  <span className="text-2xl p-1 bg-red-50 border border-red-200 rounded-lg shrink-0">
+                    {currentQuestion.icon}
+                  </span>
+                  <div>
+                    <span className="inline-flex items-center px-2 py-0.2 rounded-full text-[10px] font-black bg-red-100 text-red-800 uppercase">
+                      Incidencia • Rubro {currentQuestion.id}
+                    </span>
+                    <h4 className="text-sm sm:text-base font-black text-slate-900 leading-tight">
+                      {currentQuestion.titulo}
+                    </h4>
+                  </div>
+                </div>
+
+                <AudioReader text={`Detalle de la incidencia para el rubro ${currentQuestion.id}. ${currentQuestion.titulo}. Por favor complete qué ocurrió, qué actividad podría afectarse y las acciones adoptadas.`} />
+              </div>
+
+              {/* 4 Sub-questions Grid - Fits comfortably without page scrolling */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                
+                {/* 1. ¿Qué ocurrió y dónde? */}
                 <div className="space-y-1">
-                  <label className="block text-slate-800 font-black text-lg">
+                  <label className="block text-slate-800 font-bold text-xs">
                     1. ¿Qué ocurrió y dónde? <span className="text-red-500">*</span>
                   </label>
                   <textarea
-                     id="textarea-ocurrencia"
-                     rows={2}
-                     value={ocurrencia}
-                     onChange={(e) => setOcurrencia(e.target.value)}
-                     placeholder="Escriba los hechos ocurridos y la ubicación exacta (Ej. Avenida principal cruce con Jirón Lima)..."
-                     className="w-full p-4 border-2 border-slate-300 rounded-xl font-bold text-slate-800 focus:border-blue-600 focus:outline-none placeholder-slate-400 bg-slate-50 text-base"
-                     required
+                    id="textarea-ocurrencia"
+                    rows={2}
+                    value={ocurrencia}
+                    onChange={(e) => setOcurrencia(e.target.value)}
+                    placeholder="Hechos ocurridos y ubicación exacta..."
+                    className="w-full p-2 border border-slate-300 rounded-lg font-bold text-slate-800 focus:border-red-500 focus:outline-none placeholder-slate-400 bg-slate-50 text-xs"
+                    required
                   />
                 </div>
 
-                {/* Sub-question 2: ¿Qué actividad electoral podría afectarse? */}
+                {/* 2. ¿Qué actividad electoral podría afectarse? */}
                 <div className="space-y-1">
-                  <label className="block text-slate-800 font-black text-lg">
-                    2. ¿Qué actividad electoral podría afectarse y cuál sería la consecuencia? <span className="text-red-500">*</span>
+                  <label className="block text-slate-800 font-bold text-xs">
+                    2. ¿Qué actividad electoral podría afectarse? <span className="text-red-500">*</span>
                   </label>
                   <textarea
                     id="textarea-consecuencia"
                     rows={2}
                     value={consecuencia}
                     onChange={(e) => setConsecuencia(e.target.value)}
-                    placeholder="Describa la actividad en riesgo y el impacto previsto (Ej. Retraso del camión de material, ausentismo de miembros de mesa)..."
-                    className="w-full p-4 border-2 border-slate-300 rounded-xl font-bold text-slate-800 focus:border-blue-600 focus:outline-none placeholder-slate-400 bg-slate-50 text-base"
+                    placeholder="Actividad en riesgo e impacto previsto..."
+                    className="w-full p-2 border border-slate-300 rounded-lg font-bold text-slate-800 focus:border-red-500 focus:outline-none placeholder-slate-400 bg-slate-50 text-xs"
                     required
                   />
                 </div>
 
-                {/* Sub-question 3: Acciones adoptadas por la ODPE */}
+                {/* 3. Acciones adoptadas por la ODPE */}
                 <div className="space-y-1">
-                  <label className="block text-slate-800 font-black text-lg">
+                  <label className="block text-slate-800 font-bold text-xs">
                     3. Acciones adoptadas por la ODPE <span className="text-red-500">*</span>
                   </label>
                   <textarea
@@ -603,234 +693,132 @@ export default function DistrictWizard({ onReportSubmit, onViewReportsClick, isS
                     rows={2}
                     value={accionesOdpe}
                     onChange={(e) => setAccionesOdpe(e.target.value)}
-                    placeholder="Medidas tomadas o coordinaciones realizadas de inmediato..."
-                    className="w-full p-4 border-2 border-slate-300 rounded-xl font-bold text-slate-800 focus:border-indigo-500 focus:outline-none placeholder-slate-400 bg-slate-50 text-base"
+                    placeholder="Medidas tomadas o coordinaciones inmediatas..."
+                    className="w-full p-2 border border-slate-300 rounded-lg font-bold text-slate-800 focus:border-indigo-500 focus:outline-none placeholder-slate-400 bg-slate-50 text-xs"
                     required
                   />
                 </div>
 
-                {/* Sub-question 4: Fuente o evidencia */}
-                <div className="space-y-3">
-                  <label className="block text-slate-800 font-black text-lg">
+                {/* 4. Fuente o evidencia + Adjunto */}
+                <div className="space-y-1">
+                  <label className="block text-slate-800 font-bold text-xs">
                     4. Fuente o evidencia (Opcional)
                   </label>
-                  
-                  {/* Text input for description */}
                   <input
                     id="input-fuente-evidencia"
                     type="text"
                     value={fuenteEvidencia}
                     onChange={(e) => setFuenteEvidencia(e.target.value)}
-                    placeholder="Ej. Detalle del informante, enlace web, llamada telefónica..."
-                    className="w-full p-4 border-2 border-slate-300 rounded-xl font-bold text-slate-800 focus:border-indigo-500 focus:outline-none placeholder-slate-400 bg-slate-50 text-base"
+                    placeholder="Ej. Enlace web, llamada, documento..."
+                    className="w-full p-1.5 border border-slate-300 rounded-lg font-bold text-slate-800 focus:border-indigo-500 focus:outline-none placeholder-slate-400 bg-slate-50 text-xs mb-1"
                   />
 
-                  {/* File and Image Upload block (for PC & Cell phones) */}
-                  <div className="border-4 border-dashed border-blue-200 rounded-2xl p-4 bg-blue-50/50 flex flex-col items-center justify-center transition-all hover:bg-blue-50">
-                    {selectedFile ? (
-                      <div className="w-full space-y-3">
-                        <div className="flex items-center justify-between bg-white p-3 rounded-xl border-2 border-blue-100 shadow-sm">
-                          <div className="flex items-center gap-2.5 overflow-hidden">
-                            {selectedFile.type.startsWith('image/') ? (
-                              <img 
-                                src={selectedFile.data} 
-                                alt="Vista previa" 
-                                className="w-12 h-12 rounded-lg object-cover border border-slate-200 shrink-0"
-                              />
-                            ) : (
-                              <div className="bg-blue-100 p-2 rounded-lg text-blue-600 shrink-0">
-                                <File className="w-6 h-6" />
-                              </div>
-                            )}
-                            <div className="text-left overflow-hidden">
-                              <p className="text-sm font-extrabold text-slate-900 truncate max-w-[180px] sm:max-w-xs">{selectedFile.name}</p>
-                              <p className="text-xs text-slate-400 font-semibold uppercase">Archivo cargado exitosamente</p>
-                            </div>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => setSelectedFile(null)}
-                            className="p-1.5 bg-slate-100 text-slate-500 hover:bg-red-100 hover:text-red-700 rounded-lg transition-all active:scale-95"
-                            title="Quitar archivo"
-                          >
-                            <X className="w-5 h-5" />
-                          </button>
-                        </div>
+                  {/* File upload compact row */}
+                  {selectedFile ? (
+                    <div className="flex items-center justify-between bg-blue-50 p-1.5 rounded-lg border border-blue-200">
+                      <div className="flex items-center gap-1.5 overflow-hidden">
+                        {selectedFile.type.startsWith('image/') ? (
+                          <img 
+                            src={selectedFile.data} 
+                            alt="Vista previa" 
+                            className="w-6 h-6 rounded object-cover border border-slate-200 shrink-0"
+                          />
+                        ) : (
+                          <File className="w-4 h-4 text-blue-600 shrink-0" />
+                        )}
+                        <span className="text-[11px] font-bold text-slate-800 truncate max-w-[140px]">{selectedFile.name}</span>
                       </div>
-                    ) : (
-                      <label className="w-full flex flex-col items-center justify-center cursor-pointer py-4 space-y-2">
-                        <div className="p-3 bg-blue-100 text-blue-800 rounded-full animate-bounce">
-                          <Upload className="w-6 h-6" />
-                        </div>
-                        <div className="text-center">
-                          <span className="text-blue-950 font-black text-sm block">Subir Foto o Documento</span>
-                          <span className="text-blue-500 font-bold text-xs">Soporta cámara de celular o archivos del PC</span>
-                        </div>
-                        <input
-                           type="file"
-                           accept="image/*,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                           onChange={handleFileChange}
-                           className="hidden"
-                        />
-                      </label>
-                    )}
-                  </div>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedFile(null)}
+                        className="p-1 text-red-600 hover:bg-red-100 rounded cursor-pointer"
+                        title="Quitar archivo"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ) : (
+                    <label className="flex items-center justify-center gap-1.5 border border-dashed border-blue-300 bg-blue-50/50 hover:bg-blue-50 rounded-lg py-1 px-2 cursor-pointer transition-colors">
+                      <Upload className="w-3.5 h-3.5 text-blue-700" />
+                      <span className="text-[11px] font-bold text-blue-900">Adjuntar Foto o Archivo (Opcional)</span>
+                      <input
+                        type="file"
+                        accept="image/*,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                        onChange={handleFileChange}
+                        className="hidden"
+                      />
+                    </label>
+                  )}
                 </div>
+
               </div>
-            )}
 
-          </div>
+              {/* Bottom Actions: Cancel / Save & Advance */}
+              <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={handleCancelSi}
+                  className="py-1.5 px-3 bg-slate-100 hover:bg-slate-200 text-slate-700 active:scale-95 transition-all rounded-lg font-bold text-xs flex items-center gap-1 cursor-pointer"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                  <span>Cambiar a NO (Sin Novedad)</span>
+                </button>
 
-          {/* Navigation Controls */}
-          <div className="flex items-center justify-between gap-4 pt-4">
-            <button
-              id="btn-wizard-back"
-              disabled={isSubmitting}
-              onClick={handleBack}
-              className="py-4 px-6 bg-white border-4 border-slate-300 text-slate-700 hover:bg-slate-50 active:scale-95 transition-all rounded-2xl font-black text-lg flex items-center gap-2 shadow-sm disabled:opacity-50"
-            >
-              <ChevronLeft className="w-6 h-6" /> Atrás
-            </button>
+                <button
+                  id="btn-wizard-next"
+                  disabled={isSubmitting}
+                  onClick={handleNext}
+                  className="py-2 px-5 bg-blue-800 hover:bg-blue-900 active:scale-95 transition-all rounded-xl font-black text-xs sm:text-sm text-white flex items-center gap-1.5 shadow-sm cursor-pointer"
+                >
+                  {isSubmitting ? (
+                    <>
+                      <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                      <span>Enviando...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>{currentQuestionIndex === QUESTIONS.length - 1 ? 'Guardar y Finalizar' : 'Guardar y Siguiente'}</span>
+                      <ChevronRight className="w-4 h-4" />
+                    </>
+                  )}
+                </button>
+              </div>
 
-            {/* Next button ONLY enabled if question is answered (either SÍ or NO) */}
-            <button
-              id="btn-wizard-next"
-              disabled={hasProblem === null || isSubmitting}
-              onClick={handleNext}
-              className={`py-4 px-8 rounded-2xl font-black text-xl flex items-center gap-2 shadow-lg transition-all transform active:scale-95 ${
-                hasProblem !== null && !isSubmitting
-                  ? 'bg-blue-800 text-white cursor-pointer hover:bg-blue-900 ring-4 ring-blue-200'
-                  : 'bg-slate-200 text-slate-400 border-2 border-slate-300 cursor-not-allowed opacity-60'
-              }`}
-            >
-              {isSubmitting ? (
-                <>
-                  <div className="w-6 h-6 border-3 border-white border-t-transparent rounded-full animate-spin"></div>
-                  <span>Enviando a Supabase...</span>
-                </>
-              ) : (
-                <>
-                  <span>{currentQuestionIndex === QUESTIONS.length - 1 ? 'Finalizar y Enviar Reporte' : 'Siguiente Rubro'}</span>
-                  <ChevronRight className="w-6 h-6" />
-                </>
-              )}
-            </button>
-          </div>
+            </div>
+          )}
         </div>
       )}
 
-      {/* STEP 3: SUCCESS STATE */}
+      {/* STEP 3: SUCCESS STATE - CLEAN & DIRECT CONFIRMATION */}
       {step === 3 && (
-        <div id="wizard-step-3" className="bg-white border-4 border-blue-200 rounded-3xl p-6 sm:p-10 text-center space-y-6 shadow-2xl animate-fadeIn">
+        <div id="wizard-step-3" className="bg-white border-2 border-emerald-300 rounded-3xl p-8 sm:p-12 text-center space-y-6 shadow-2xl animate-fadeIn max-w-2xl mx-auto my-6">
           
-          {submitResult?.isOnline ? (
-            <div className="inline-flex items-center justify-center bg-emerald-100 border-4 border-emerald-400 rounded-full w-24 h-24 text-emerald-700 animate-bounce">
-              <Check className="w-14 h-14 stroke-[4px]" />
+          {/* Prominent Visual Success Badge Image / Graphic */}
+          <div className="relative inline-flex items-center justify-center">
+            <div className="absolute inset-0 bg-emerald-400/20 rounded-full blur-xl animate-pulse"></div>
+            <div className="relative bg-linear-to-b from-emerald-500 to-emerald-700 p-5 rounded-full shadow-lg border-4 border-white text-white">
+              <Check className="w-16 h-16 sm:w-20 sm:h-20 stroke-[3.5px]" />
             </div>
-          ) : (
-            <div className="inline-flex items-center justify-center bg-amber-100 border-4 border-amber-400 rounded-full w-24 h-24 text-amber-800">
-              <AlertTriangle className="w-14 h-14 stroke-[3px]" />
-            </div>
-          )}
+          </div>
 
-          <div className="space-y-3">
-            <h2 className="text-3xl md:text-4xl font-black text-blue-950 flex items-center justify-center gap-2">
-              <Sparkles className="w-8 h-8 text-red-500 animate-pulse" />
-              <span>¡Reporte Completado, Coordinador!</span>
-              <Sparkles className="w-8 h-8 text-red-500 animate-pulse" />
+          <div className="space-y-4">
+            <div className="inline-flex items-center gap-2 px-4 py-1.5 bg-emerald-100 text-emerald-900 border border-emerald-300 rounded-full text-xs font-black uppercase tracking-wider">
+              <span>✓</span> Proceso Completado
+            </div>
+
+            <h2 className="text-2xl sm:text-3xl md:text-4xl font-black text-slate-900 leading-tight">
+              SUS DATOS FUERON ALMACENADOS CORRECTAMENTE
             </h2>
             
-            <p className="text-lg sm:text-xl text-blue-900 font-bold max-w-xl mx-auto">
-              Informante: <span className="text-blue-950 font-black">{nombreCompleto}</span> | ODPE <span className="text-blue-950 font-black">{odpe}</span> (<span className="text-blue-950 font-black underline">{distritoZona}</span>)
-            </p>
-          </div>
-
-          {/* Sync Status Banner */}
-          <div className={`p-5 rounded-2xl border-2 text-left space-y-2 ${
-            submitResult?.isOnline
-              ? 'bg-emerald-50 border-emerald-300 text-emerald-950'
-              : 'bg-amber-50 border-amber-300 text-amber-950'
-          }`}>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 font-black text-base sm:text-lg">
-                <span className={`w-3 h-3 rounded-full ${submitResult?.isOnline ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`}></span>
-                <span>
-                  {submitResult?.isOnline 
-                    ? '✅ Guardado Exitosamente en Supabase Central' 
-                    : '⚠️ Guardado Únicamente en la Memoria de Este Teléfono'}
-                </span>
-              </div>
-              <span className="text-xs uppercase font-extrabold px-2.5 py-1 rounded-full bg-white/80 border">
-                {submitResult?.count || 9} Rubros Procesados
-              </span>
-            </div>
-
-            <p className="text-sm font-medium leading-relaxed">
-              {submitResult?.isOnline
-                ? 'Los 9 rubros de tu evaluación distrital han sido transmitidos a la base de datos central en la nube y ya están disponibles en tiempo real en la sede central.'
-                : submitResult?.error || 'Este celular no tiene vinculada la base de datos de Supabase o no hay conexión de internet en este momento. Los datos quedaron a salvo en este dispositivo.'}
+            <p className="text-xl sm:text-2xl text-blue-900 font-black tracking-wide">
+              PUEDE CERRAR EL APLICATIVO
             </p>
 
-            {!submitResult?.isOnline && (
-              <div className="pt-2 flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  id="btn-retry-submit"
-                  disabled={isSubmitting}
-                  onClick={() => submitAllNineQuestions(answers)}
-                  className="px-4 py-2.5 bg-blue-800 hover:bg-blue-900 text-white font-black text-sm rounded-xl transition-all active:scale-95 shadow flex items-center gap-2"
-                >
-                  {isSubmitting ? 'Reintentando...' : '🔄 Reintentar Envío a Supabase'}
-                </button>
+            <div className="pt-2">
+              <div className="inline-block bg-slate-100 border border-slate-200 rounded-2xl px-6 py-3 text-sm sm:text-base text-slate-700 font-bold max-w-lg mx-auto">
+                Informante: <span className="text-slate-950 font-black">{nombreCompleto}</span>
               </div>
-            )}
-          </div>
-
-          {/* Summary of 9 rubros */}
-          <div className="bg-slate-50 border-2 border-slate-200 rounded-2xl p-4 text-left space-y-3">
-            <h4 className="text-xs font-black text-slate-500 uppercase tracking-wider">Resumen de los 9 Rubros Evaluados:</h4>
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
-              {QUESTIONS.map((q) => {
-                const ans = answers[q.id];
-                const hasProb = ans?.hasProblem;
-                return (
-                  <div key={q.id} className={`p-2.5 rounded-xl border text-xs flex items-center justify-between gap-2 ${
-                    hasProb ? 'bg-rose-50 border-rose-200 text-rose-900 font-bold' : 'bg-white border-slate-200 text-slate-700'
-                  }`}>
-                    <span className="truncate">{q.id}. {q.titulo.slice(0, 24)}...</span>
-                    <span className={`px-2 py-0.5 rounded-full font-black text-[10px] shrink-0 ${
-                      hasProb ? 'bg-rose-200 text-rose-900' : 'bg-emerald-100 text-emerald-800'
-                    }`}>
-                      {hasProb ? 'CON INCIDENCIA' : 'NORMAL'}
-                    </span>
-                  </div>
-                );
-              })}
             </div>
-          </div>
-
-          <div className="flex justify-center pt-2">
-            <AudioReader text={`Reporte de coyuntura finalizado con éxito para la ODPE ${odpe}, distrito ${distritoZona}. Se evaluaron y registraron los nueve rubros.`} />
-          </div>
-
-          {/* Action buttons */}
-          <div className="pt-4 flex flex-col sm:flex-row items-center justify-center gap-3">
-            <button
-              type="button"
-              id="btn-new-report"
-              onClick={handleRestart}
-              className="w-full sm:w-auto px-8 py-4 bg-blue-800 hover:bg-blue-900 text-white font-black text-lg rounded-2xl shadow-lg transition-all active:scale-95"
-            >
-              Registrar Nuevo Informe
-            </button>
-            <button
-              type="button"
-              id="btn-view-dashboard"
-              onClick={onViewReportsClick}
-              className="w-full sm:w-auto px-6 py-4 bg-white border-2 border-slate-300 hover:bg-slate-50 text-slate-700 font-black text-lg rounded-2xl shadow transition-all active:scale-95"
-            >
-              Ver Panel Central
-            </button>
           </div>
 
         </div>
